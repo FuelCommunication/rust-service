@@ -1,10 +1,17 @@
-use bytes::Bytes;
-use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt, Empty, Full};
-use hyper::{Request, Response, StatusCode, header};
+use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
+use hyper::{Request, Response, StatusCode, header, Method, body::{Bytes, Incoming}};
 
 pub(super) type ApiResult<T> = Result<T, hyper::Error>;
 pub(super) type BoxBodyResult = BoxBody<Bytes, hyper::Error>;
+
+pub(super) async fn init_routers(
+    req: Request<Incoming>,
+) -> ApiResult<Response<BoxBody<Bytes, hyper::Error>>> {
+    match (req.method(), req.uri().path()) {
+        (&Method::GET, "/ping") => ping().await,
+        _ => Ok(not_found()),
+    }
+}
 
 fn empty() -> BoxBodyResult {
     Empty::<Bytes>::new()
@@ -18,7 +25,7 @@ fn full<T: Into<Bytes>>(chunk: T) -> BoxBodyResult {
         .boxed()
 }
 
-pub(crate) async fn ping(_: Request<hyper::body::Incoming>) -> ApiResult<Response<BoxBodyResult>> {
+pub(crate) async fn ping() -> ApiResult<Response<BoxBodyResult>> {
     let json = serde_json::json!({"ping": "pong"}).to_string();
 
     let response = Response::builder()
