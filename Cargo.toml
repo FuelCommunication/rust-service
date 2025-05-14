@@ -1,21 +1,34 @@
 [workspace]
 resolver = "2"
-members = [
-    "stream-service",
-]
+members = ["stream-service"]
+default-members = ["stream-service"]
 
 [workspace.package]
 edition = "2024"
 
 [workspace.dependencies]
+# HTTP stack
 hyper = { version = "1.6.0", features = ["server", "http1"] }
 http-body-util = "0.1.3"
-hyper-util = { version = "0.1", features = ["full"] }
-bytes = "1"
+hyper-util = { version = "0.1", features = ["server", "tokio"] }
 tower = "0.5.2"
-serde_json = "1.0.140"
+
+# Async runtime
+tokio = { version = "1.44.2", features = ["rt-multi-thread", "macros"] }
+
+# Observability
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-tokio = { version = "1.44.2", features = ["full", "tracing"] }
+
+# JSON serialization
+serde_json = "1.0.140"
+
+[profile.release]
+lto = "fat"
+opt-level = 3
+codegen-units = 1
+panic = 'abort'
+debug = false
+strip = true
 
 
