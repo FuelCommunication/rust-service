@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["stream-service"]
+members = ["s3", "stream-service"]
 default-members = ["stream-service"]
 
 [workspace.package]
@@ -24,6 +24,12 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 
 # JSON serialization
 serde_json = "1.0.140"
+
+# Errors
+thiserror = "2.0.12"
+
+# custom crates
+s3 = {path = "s3" }
 
 [profile.release]
 lto = "fat"
