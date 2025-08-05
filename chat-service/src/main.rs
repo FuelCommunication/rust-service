@@ -2,9 +2,12 @@ use stream_service::ServerBuilder;
 
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv().unwrap();
+
     ServerBuilder::new()
         .await
-        .init_tracing(tracing::Level::INFO)
+        .init_tracing()
+        .init_cors()
         .run()
-        .await
+        .await;
 }

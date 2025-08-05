@@ -1,5 +1,5 @@
 # Rust service
-Stack: hyper + tokio, tower, serde-json, tracing
+Stack: axum, tokio, tower-http, serde-json, tracing
 
 ## Start service
 Locally:
@@ -7,10 +7,10 @@ Locally:
 cargo run --release
 ```
 
-With docker:
+In docker container:
 ```shell
-docker build -t hyper-server .
-docker run --rm -p 3000:3000 hyper-server
+docker build -t rust-server .
+docker run --rm -p 3000:3000 rust-server
 ```
 
 ## Ping server
