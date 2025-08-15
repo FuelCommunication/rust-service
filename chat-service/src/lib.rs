@@ -1,9 +1,15 @@
 mod api;
 mod api_response;
+mod state;
 
-use crate::api::{not_found, ping};
+use api::{
+    images::router::{delete_image, download_image, upload_image},
+    not_found, ping,
+};
 use axum::{Router, routing};
-use std::time::Duration;
+use s3::S3;
+use state::{ServerData, ServerState};
+use std::{sync::Arc, time::Duration};
 use tokio::net::TcpListener;
 use tower_http::{timeout::TimeoutLayer, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
@@ -16,7 +22,7 @@ pub struct ServerBuilder {
 impl ServerBuilder {
     pub async fn new() -> Self {
         let tcp_listener = Self::init_tcp_listener().await;
-        let router = Self::init_router();
+        let router = Self::init_router().await;
 
         Self {
             tcp_listener,
@@ -25,16 +31,24 @@ impl ServerBuilder {
     }
 
     async fn init_tcp_listener() -> TcpListener {
-        let host = std::env::var("HOST").expect("Host don`t set");
-        let port = std::env::var("PORT").expect("Port don`t set");
+        let host = read_env_var("HOST");
+        let port = read_env_var("PORT");
         let addr = format!("{host}:{port}");
 
         TcpListener::bind(addr).await.expect("the address is busy")
     }
 
-    fn init_router() -> Router {
+    async fn init_router() -> Router {
+        let state = Self::init_state().await;
+
         Router::new()
             .route("/ping", routing::get(ping))
+            .route("/images/upload", routing::post(upload_image))
+            .route(
+                "/images/{filename}",
+                routing::get(download_image).delete(delete_image),
+            )
+            .with_state(state)
             .fallback(not_found)
             .layer((
                 TraceLayer::new_for_http(),
@@ -49,8 +63,7 @@ impl ServerBuilder {
         };
         use tower_http::cors::CorsLayer;
 
-        let origins = std::env::var("ORIGINS")
-            .expect("ORIGINS env var is not set")
+        let origins = read_env_var("ORIGINS")
             .split(',')
             .map(|s| s.trim())
             .map(|s| HeaderValue::from_str(s).expect("Invalid origin in ORIGINS"))
@@ -69,6 +82,17 @@ impl ServerBuilder {
 
         self.router = self.router.layer(cors);
         self
+    }
+
+    async fn init_state() -> ServerState {
+        let access_key = read_env_var("ACCESS_KEY");
+        let secret_key = read_env_var("SECRET_KEY");
+        let region = read_env_var("REGION");
+        let endpoint_url = read_env_var("ENDPOINT_URL");
+        let bucket: &'static str = Box::leak(read_env_var("BUCKET").into_boxed_str());
+        let s3 = S3::new(access_key, secret_key, region, endpoint_url, bucket).await;
+
+        Arc::new(ServerData { s3 })
     }
 
     pub fn init_tracing(self) -> Self {
@@ -94,6 +118,10 @@ impl ServerBuilder {
             .await
             .unwrap()
     }
+}
+
+fn read_env_var(key: &str) -> String {
+    std::env::var(key).expect(&format!("{key} don`t set"))
 }
 
 async fn shutdown_signal() {

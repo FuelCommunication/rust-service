@@ -1,3 +1,5 @@
+pub mod images;
+
 use crate::api_response::ApiError;
 use axum::Json;
 use serde_json::json;
@@ -7,6 +9,6 @@ pub async fn ping() -> Json<serde_json::Value> {
 }
 
 pub async fn not_found() -> ApiError {
-    ApiError::NotFound
+    ApiError::NotFound("Url not found".to_owned())
 }
 
