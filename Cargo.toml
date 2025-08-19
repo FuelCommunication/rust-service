@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["s3", "chat-service"]
+members = ["s3", "chat-service", "kafka"]
 default-members = ["chat-service"]
 
 [workspace.package]
@@ -10,7 +10,7 @@ license = "MIT"
 
 [workspace.dependencies]
 # HTTP stack
-axum = {version = "0.8.4", features = ["multipart", "macros"]}
+axum = { version = "0.8.4", features = ["multipart", "macros"] }
 tower-http = { version = "0.6.2", features = ["cors", "trace", "timeout"] }
 
 # Async runtime
@@ -21,10 +21,11 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 
 # JSON serialization
+serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.142"
 
 # UUID
-uuid = {version = "1.18.0", features = ["v7"]}
+uuid = { version = "1.18.0", features = ["v7", "serde"] }
 
 # Errors
 thiserror = "2.0.12"
@@ -33,7 +34,8 @@ thiserror = "2.0.12"
 dotenvy = "0.15.7"
 
 # custom crates
-s3 = {path = "s3" }
+s3 = { path = "s3" }
+kafka = { path = "kafka" }
 
 [profile.release]
 lto = "fat"
