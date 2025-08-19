@@ -11,6 +11,12 @@ use aws_sdk_s3::{
     },
     primitives::ByteStreamError,
 };
+use axum::{
+    Json,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use serde_json::json;
 use std::io;
 
 pub type S3Result<T> = Result<T, S3Error>;
@@ -55,4 +61,61 @@ pub enum S3Error {
     BuildError(#[from] BuildError),
     #[error("Tokio join error: {0}")]
     TokioJoin(String),
+}
+
+impl IntoResponse for S3Error {
+    fn into_response(self) -> Response {
+        let (status, e) = match self {
+            Self::GetObjectError(e) => (StatusCode::BAD_REQUEST, format!("GetObject failed: {e}")),
+            Self::ListObjectError(e) => {
+                (StatusCode::BAD_REQUEST, format!("ListObjects failed: {e}"))
+            }
+            Self::PutObjectError(e) => (StatusCode::BAD_REQUEST, format!("PutObject failed: {e}")),
+            Self::CopyObjectError(e) => {
+                (StatusCode::BAD_REQUEST, format!("CopyObject failed: {e}"))
+            }
+            Self::UploadPart(e) => (StatusCode::BAD_REQUEST, format!("UploadPart failed: {e}")),
+            Self::CreateMultipart(e) => (
+                StatusCode::BAD_REQUEST,
+                format!("CreateMultipart failed: {e}"),
+            ),
+            Self::CompleteMultipart(e) => (
+                StatusCode::BAD_REQUEST,
+                format!("CompleteMultipart failed: {e}"),
+            ),
+            Self::AbortMultipart(e) => (
+                StatusCode::BAD_REQUEST,
+                format!("AbortMultipart failed: {e}"),
+            ),
+            Self::HeaderObjectError(e) => {
+                (StatusCode::BAD_REQUEST, format!("HeadObject failed: {e}"))
+            }
+            Self::DeleteObjectError(e) => {
+                (StatusCode::BAD_REQUEST, format!("DeleteObject failed: {e}"))
+            }
+            Self::DeleteObjectsError(e) => (
+                StatusCode::BAD_REQUEST,
+                format!("DeleteObjects failed: {e}"),
+            ),
+            Self::DeleteBucketError(e) => {
+                (StatusCode::BAD_REQUEST, format!("DeleteBucket failed: {e}"))
+            }
+            Self::BucketNotEmpty => (StatusCode::CONFLICT, "Bucket is not empty".to_string()),
+            Self::MissingETag => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Missing ETag in response".to_string(),
+            ),
+            Self::MissingUploadId => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Missing upload_id".to_string(),
+            ),
+            Self::IO(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            Self::ByteStreamError(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            Self::BuildError(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            Self::TokioJoin(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+        };
+
+        let body = Json(json!({"error": e}));
+        (status, body).into_response()
+    }
 }
