@@ -1,13 +1,17 @@
 use super::schemas::Image;
 use crate::{
-    api_response::{ApiError, ApiResult},
+    error::{ApiError, ApiResult, HttpError},
     state::ServerState,
 };
 use axum::extract::{Multipart, Path, State};
+use kafka::schemas::{Action, KafkaMessage};
+use s3::error::S3Error;
+use uuid::Uuid;
 
 #[tracing::instrument(skip(state))]
 pub async fn upload_image(
     State(state): State<ServerState>,
+    Path(user_id): Path<Uuid>,
     mut multipart: Multipart,
 ) -> ApiResult<Image> {
     if let Some(field) = multipart.next_field().await.unwrap() {
@@ -16,35 +20,33 @@ pub async fn upload_image(
             .map(ToString::to_string)
             .unwrap_or_else(|| "application/octet-stream".into());
         let data = field.bytes().await.unwrap();
-        let key = uuid::Uuid::now_v7().to_string();
+        let key = Uuid::now_v7().to_string();
 
-        state
-            .s3
-            .upload(&key, data, content_type)
-            .await
-            .map_err(|err| ApiError::InternalServerError(err.to_string()))?;
+        state.s3.upload(&key, data, content_type).await?;
+
+        let message = KafkaMessage {
+            user_id: user_id.to_string(),
+            action: Action::Create,
+            data: Some(key.to_owned()),
+        };
+        state.kafka.producer.send(&message).await?;
+
         Ok(key.into())
     } else {
-        Err(ApiError::InternalServerError("Bucket is empty".to_owned()))
+        Err(ApiError::Http(HttpError::InternalServerError(
+            "Bucket is empty".to_owned(),
+        )))
     }
 }
 
 #[tracing::instrument(skip(state))]
+#[axum::debug_handler]
 pub async fn download_image(
     State(state): State<ServerState>,
     Path(filename): Path<String>,
-) -> Result<Image, ApiError> {
-    let res = state
-        .s3
-        .download(&filename)
-        .await
-        .map_err(|err| ApiError::InternalServerError(err.to_string()))?;
-    let body: Vec<u8> = res
-        .body
-        .collect()
-        .await
-        .map_err(|err| ApiError::InternalServerError(err.to_string()))?
-        .to_vec();
+) -> ApiResult<Image> {
+    let res = state.s3.download(&filename).await?;
+    let body: Vec<u8> = res.body.collect().await.map_err(S3Error::from)?.to_vec();
 
     Ok((filename, body).into())
 }
@@ -53,12 +55,8 @@ pub async fn download_image(
 pub async fn delete_image(
     State(state): State<ServerState>,
     Path(filename): Path<String>,
-) -> Result<Image, ApiError> {
-    state
-        .s3
-        .delete_object(&filename)
-        .await
-        .map_err(|err| ApiError::InternalServerError(err.to_string()))?;
+) -> ApiResult<Image> {
+    state.s3.delete_object(&filename).await?;
 
     tracing::info!("Image deleted with filename: {filename}");
 
