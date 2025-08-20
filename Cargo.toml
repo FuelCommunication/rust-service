@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["s3", "chat-service", "kafka"]
-default-members = ["chat-service"]
+members = ["s3", "service", "kafka"]
+default-members = ["service"]
 
 [workspace.package]
 edition = "2024"
