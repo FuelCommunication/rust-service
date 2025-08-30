@@ -1,4 +1,4 @@
-use stream_service::ServerBuilder;
+use service::ServerBuilder;
 
 #[tokio::main]
 async fn main() {
