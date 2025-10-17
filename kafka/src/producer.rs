@@ -1,3 +1,4 @@
+use crate::error::KafkaError;
 use crate::{config::ProducerConfig, error::KafkaResult, schemas::KafkaMessage};
 use rdkafka::{
     ClientConfig,
@@ -11,11 +12,17 @@ pub struct KafkaProducer {
 
 impl KafkaProducer {
     pub fn new(config: ProducerConfig) -> KafkaResult<Self> {
+        Self::with_retry_attempts(config, 3)
+    }
+
+    pub fn with_retry_attempts(config: ProducerConfig, retry_attempts: u32) -> KafkaResult<Self> {
         let producer = ClientConfig::new()
             .set("bootstrap.servers", config.brokers)
             .set("message.timeout.ms", "5000")
             .set("allow.auto.create.topics", "true")
+            .set("retries", retry_attempts.to_string())
             .create::<FutureProducer>()?;
+
         Ok(Self {
             producer,
             topic: config.topic,
@@ -28,7 +35,10 @@ impl KafkaProducer {
 
         let record = FutureRecord::to(&self.topic).payload(&payload).key(key);
 
-        self.producer.send_result(record)?.await??;
-        Ok(())
+        self.producer
+            .send_result(record)?
+            .await
+            .map(|_| ())
+            .map_err(KafkaError::CanceledMessage)
     }
 }

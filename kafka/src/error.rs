@@ -10,14 +10,18 @@ pub type KafkaResult<T> = Result<T, KafkaError>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum KafkaError {
-    #[error("RDKafka error: {0}")]
+    #[error("RDKafka initialization error: {0}")]
     RDKafka(#[from] RDKafkaError),
-    #[error("Kafka error: {0}")]
+    #[error("Kafka operation error: {0}")]
     Kafka(#[from] rdkafka::error::KafkaError),
-    #[error("De/serialization error: {0}")]
-    SerdeJson(#[from] serde_json::Error),
-    #[error("Oneshot message was canceled")]
+    #[error("Message serialization failed: {0}")]
+    Serialization(#[from] serde_json::Error),
+    #[error("Message was canceled or channel closed")]
     CanceledMessage(#[from] futures::channel::oneshot::Canceled),
+    #[error("Empty message payload received from topic: {topic}")]
+    EmptyPayload { topic: String },
+    #[error("Invalid configuration: {0}")]
+    InvalidConfig(String),
 }
 
 impl
@@ -40,10 +44,12 @@ impl From<(rdkafka::error::KafkaError, OwnedMessage)> for KafkaError {
 impl IntoResponse for KafkaError {
     fn into_response(self) -> Response {
         let (status, e) = match self {
-            Self::Kafka(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             Self::RDKafka(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-            Self::SerdeJson(e) => (StatusCode::BAD_REQUEST, e.to_string()),
+            Self::Kafka(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            Self::Serialization(e) => (StatusCode::BAD_REQUEST, e.to_string()),
             Self::CanceledMessage(e) => (StatusCode::BAD_REQUEST, e.to_string()),
+            Self::EmptyPayload { topic } => (StatusCode::BAD_REQUEST, topic),
+            Self::InvalidConfig(e) => (StatusCode::CONFLICT, e.to_string()),
         };
 
         let body = Json(json!({"error": e}));
