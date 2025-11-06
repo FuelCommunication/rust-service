@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["s3", "service", "kafka"]
+members = ["s3", "service", "kafka", "scylladb"]
 default-members = ["service"]
 
 [workspace.package]
@@ -10,32 +10,38 @@ license = "MIT"
 
 [workspace.dependencies]
 # HTTP stack
-axum = { version = "0.8.4", features = ["multipart", "macros"] }
-tower-http = { version = "0.6.2", features = ["cors", "trace", "timeout"] }
+axum = { version = "0.8.6", features = ["multipart", "macros", "ws"] }
+tower-http = { version = "0.6.6", features = ["cors", "trace", "timeout"] }
 
 # Async runtime
-tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "signal"] }
 
 # Observability
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 
 # JSON serialization
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.142"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
 
-# UUID
-uuid = { version = "1.18.0", features = ["v7", "serde"] }
+# Other
+uuid = { version = "1.18.1", features = ["v7", "serde"] }
+chrono = {version =  "0.4.42", features = ["serde"] }
 
 # Errors
-thiserror = "2.0.12"
+thiserror = "2.0.17"
 
 # Env varible
 dotenvy = "0.15.7"
 
-# custom crates
+# Custom crates
 s3 = { path = "s3" }
 kafka = { path = "kafka" }
+
+# Tests
+testcontainers-modules = { version = "0.13.0", features = ["kafka", "minio"] }
+anyhow = "1.0.100"
+tempfile = "3.23.0"
 
 [profile.release]
 lto = "fat"
@@ -44,5 +50,3 @@ codegen-units = 1
 panic = 'abort'
 debug = false
 strip = true
-
-
