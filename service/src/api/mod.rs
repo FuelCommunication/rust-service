@@ -1,3 +1,4 @@
+pub mod chats;
 pub mod images;
 
 use axum::{Json, http::StatusCode, response::IntoResponse};

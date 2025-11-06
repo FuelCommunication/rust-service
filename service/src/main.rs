@@ -2,12 +2,16 @@ use service::ServerBuilder;
 
 #[tokio::main]
 async fn main() {
+    use axum::http::{Method, header};
     dotenvy::dotenv().unwrap();
 
     ServerBuilder::new()
         .await
-        .init_tracing()
-        .init_cors()
+        .with_cors(
+            [Method::GET, Method::POST, Method::DELETE],
+            [header::CONTENT_TYPE, header::ACCEPT],
+        )
+        .with_tracing()
         .run()
         .await;
 }
