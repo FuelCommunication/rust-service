@@ -24,12 +24,7 @@ pub enum KafkaError {
     InvalidConfig(String),
 }
 
-impl
-    From<(
-        rdkafka::error::KafkaError,
-        FutureRecord<'_, String, Vec<u8>>,
-    )> for KafkaError
-{
+impl From<(rdkafka::error::KafkaError, FutureRecord<'_, String, Vec<u8>>)> for KafkaError {
     fn from(e: (rdkafka::error::KafkaError, FutureRecord<String, Vec<u8>>)) -> Self {
         Self::Kafka(e.0)
     }
