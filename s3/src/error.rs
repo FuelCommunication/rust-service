@@ -1,12 +1,10 @@
 use aws_sdk_s3::{
     error::{BuildError, SdkError},
     operation::{
-        abort_multipart_upload::AbortMultipartUploadError,
-        complete_multipart_upload::CompleteMultipartUploadError, copy_object::CopyObjectError,
-        create_multipart_upload::CreateMultipartUploadError, delete_bucket::DeleteBucketError,
-        delete_object::DeleteObjectError, delete_objects::DeleteObjectsError,
-        get_object::GetObjectError, head_object::HeadObjectError,
-        list_objects_v2::ListObjectsV2Error, put_object::PutObjectError,
+        abort_multipart_upload::AbortMultipartUploadError, complete_multipart_upload::CompleteMultipartUploadError,
+        copy_object::CopyObjectError, create_multipart_upload::CreateMultipartUploadError, delete_bucket::DeleteBucketError,
+        delete_object::DeleteObjectError, delete_objects::DeleteObjectsError, get_object::GetObjectError,
+        head_object::HeadObjectError, list_objects_v2::ListObjectsV2Error, put_object::PutObjectError,
         upload_part::UploadPartError,
     },
     primitives::ByteStreamError,
@@ -39,11 +37,7 @@ pub enum S3Error {
     CompleteMultipart(#[from] SdkError<CompleteMultipartUploadError>),
     #[error("Failed to abort multipart upload: {0}")]
     AbortMultipart(#[from] SdkError<AbortMultipartUploadError>),
-    #[error("Missing ETag in upload_part response")]
-    MissingETag,
-    #[error("Missing upload_id after CreateMultipartUpload")]
-    MissingUploadId,
-    #[error("Missing upload_id after CreateMultipartUpload")]
+    #[error("Failed to get object metadata: {0}")]
     HeaderObjectError(#[from] SdkError<HeadObjectError>),
     #[error("Failed to delete object: {0}")]
     DeleteObjectError(#[from] SdkError<DeleteObjectError>),
@@ -53,6 +47,10 @@ pub enum S3Error {
     DeleteBucketError(#[from] SdkError<DeleteBucketError>),
     #[error("Bucket is not empty — objects still remain inside")]
     BucketNotEmpty,
+    #[error("Missing ETag in upload_part response")]
+    MissingETag,
+    #[error("Missing upload_id after CreateMultipartUpload")]
+    MissingUploadId,
     #[error("I/O error: {0}")]
     IO(#[from] io::Error),
     #[error("ByteStream error: {0}")]
@@ -61,61 +59,40 @@ pub enum S3Error {
     BuildError(#[from] BuildError),
     #[error("Tokio join error: {0}")]
     TokioJoin(String),
+    #[error("Configuration error: {0}")]
+    ConfigError(String),
 }
 
 impl IntoResponse for S3Error {
     fn into_response(self) -> Response {
-        let (status, e) = match self {
-            Self::GetObjectError(e) => (StatusCode::BAD_REQUEST, format!("GetObject failed: {e}")),
-            Self::ListObjectError(e) => {
-                (StatusCode::BAD_REQUEST, format!("ListObjects failed: {e}"))
-            }
-            Self::PutObjectError(e) => (StatusCode::BAD_REQUEST, format!("PutObject failed: {e}")),
-            Self::CopyObjectError(e) => {
-                (StatusCode::BAD_REQUEST, format!("CopyObject failed: {e}"))
-            }
-            Self::UploadPart(e) => (StatusCode::BAD_REQUEST, format!("UploadPart failed: {e}")),
-            Self::CreateMultipart(e) => (
-                StatusCode::BAD_REQUEST,
-                format!("CreateMultipart failed: {e}"),
-            ),
-            Self::CompleteMultipart(e) => (
-                StatusCode::BAD_REQUEST,
-                format!("CompleteMultipart failed: {e}"),
-            ),
-            Self::AbortMultipart(e) => (
-                StatusCode::BAD_REQUEST,
-                format!("AbortMultipart failed: {e}"),
-            ),
-            Self::HeaderObjectError(e) => {
-                (StatusCode::BAD_REQUEST, format!("HeadObject failed: {e}"))
-            }
-            Self::DeleteObjectError(e) => {
-                (StatusCode::BAD_REQUEST, format!("DeleteObject failed: {e}"))
-            }
-            Self::DeleteObjectsError(e) => (
-                StatusCode::BAD_REQUEST,
-                format!("DeleteObjects failed: {e}"),
-            ),
-            Self::DeleteBucketError(e) => {
-                (StatusCode::BAD_REQUEST, format!("DeleteBucket failed: {e}"))
-            }
-            Self::BucketNotEmpty => (StatusCode::CONFLICT, "Bucket is not empty".to_string()),
-            Self::MissingETag => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Missing ETag in response".to_string(),
-            ),
-            Self::MissingUploadId => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Missing upload_id".to_string(),
-            ),
-            Self::IO(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-            Self::ByteStreamError(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-            Self::BuildError(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-            Self::TokioJoin(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+        let (status, error_type, message) = match &self {
+            Self::GetObjectError(_) => (StatusCode::NOT_FOUND, "GetObjectError", self.to_string()),
+            Self::ListObjectError(_) => (StatusCode::BAD_REQUEST, "ListObjectError", self.to_string()),
+            Self::PutObjectError(_) => (StatusCode::BAD_REQUEST, "PutObjectError", self.to_string()),
+            Self::CopyObjectError(_) => (StatusCode::BAD_REQUEST, "CopyObjectError", self.to_string()),
+            Self::UploadPart(_) => (StatusCode::BAD_REQUEST, "UploadPartError", self.to_string()),
+            Self::CreateMultipart(_) => (StatusCode::BAD_REQUEST, "CreateMultipartError", self.to_string()),
+            Self::CompleteMultipart(_) => (StatusCode::BAD_REQUEST, "CompleteMultipartError", self.to_string()),
+            Self::AbortMultipart(_) => (StatusCode::BAD_REQUEST, "AbortMultipartError", self.to_string()),
+            Self::HeaderObjectError(_) => (StatusCode::NOT_FOUND, "HeadObjectError", self.to_string()),
+            Self::DeleteObjectError(_) => (StatusCode::BAD_REQUEST, "DeleteObjectError", self.to_string()),
+            Self::DeleteObjectsError(_) => (StatusCode::BAD_REQUEST, "DeleteObjectsError", self.to_string()),
+            Self::DeleteBucketError(_) => (StatusCode::BAD_REQUEST, "DeleteBucketError", self.to_string()),
+            Self::BucketNotEmpty => (StatusCode::CONFLICT, "BucketNotEmpty", self.to_string()),
+            Self::MissingETag => (StatusCode::INTERNAL_SERVER_ERROR, "MissingETag", self.to_string()),
+            Self::MissingUploadId => (StatusCode::INTERNAL_SERVER_ERROR, "MissingUploadId", self.to_string()),
+            Self::IO(_) => (StatusCode::INTERNAL_SERVER_ERROR, "IOError", self.to_string()),
+            Self::ByteStreamError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "ByteStreamError", self.to_string()),
+            Self::BuildError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "BuildError", self.to_string()),
+            Self::TokioJoin(_) => (StatusCode::INTERNAL_SERVER_ERROR, "TokioJoinError", self.to_string()),
+            Self::ConfigError(_) => (StatusCode::BAD_REQUEST, "ConfigError", self.to_string()),
         };
 
-        let body = Json(json!({"error": e}));
+        let body = Json(json!({
+            "error": error_type,
+            "message": message,
+        }));
+
         (status, body).into_response()
     }
 }
