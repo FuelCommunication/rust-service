@@ -10,22 +10,22 @@ license = "MIT"
 
 [workspace.dependencies]
 # HTTP stack
-axum = { version = "0.8.6", features = ["multipart", "macros", "ws"] }
-tower-http = { version = "0.6.6", features = ["cors", "trace", "timeout"] }
+axum = { version = "0.8.7", features = ["multipart", "macros", "ws"] }
+tower-http = { version = "0.6.7", features = ["cors", "trace", "timeout"] }
 
 # Async runtime
 tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "signal"] }
 
 # Observability
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+tracing = "0.1.43"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 
 # JSON serialization
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 
 # Other
-uuid = { version = "1.18.1", features = ["v7", "serde"] }
+uuid = { version = "1.19.0", features = ["v7", "serde"] }
 chrono = {version =  "0.4.42", features = ["serde"] }
 
 # Errors
@@ -39,7 +39,7 @@ s3 = { path = "s3" }
 kafka = { path = "kafka" }
 
 # Tests
-testcontainers-modules = { version = "0.13.0", features = ["kafka", "minio"] }
+testcontainers-modules = { version = "0.14.0", features = ["kafka", "minio"] }
 anyhow = "1.0.100"
 tempfile = "3.23.0"
 
