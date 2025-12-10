@@ -1,0 +1,12 @@
+[package]
+name = "service-proxy"
+version = "0.1.0"
+edition.workspace = true
+readme.workspace = true
+license.workspace = true
+
+[dependencies]
+pingora = { version = "0.6.0", features = ["lb"] }
+async-trait = "0.1"
+tracing.workspace = true
+tracing-subscriber.workspace = true
