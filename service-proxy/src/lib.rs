@@ -1,4 +1,5 @@
 use pingora::prelude::{Error, HTTPStatus, HttpPeer, ProxyHttp, RequestHeader, Session};
+use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
 pub type ProxyResult<T> = pingora::Result<T>;
@@ -41,7 +42,10 @@ impl ProxyHttp for ProxyService {
             }
         };
 
-        let peer = HttpPeer::new(addr, false, "".into());
+        let mut peer = HttpPeer::new(addr, false, "".into());
+        peer.options.connection_timeout = Some(Duration::from_secs(5));
+        peer.options.total_connection_timeout = Some(Duration::from_secs(10));
+
         Ok(Box::new(peer))
     }
 
