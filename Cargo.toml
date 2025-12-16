@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["s3", "service", "kafka", "scylladb"]
+members = ["s3", "service", "kafka", "scylladb", "service-proxy"]
 default-members = ["service"]
 
 [workspace.package]
@@ -11,7 +11,7 @@ license = "MIT"
 [workspace.dependencies]
 # HTTP stack
 axum = { version = "0.8.7", features = ["multipart", "macros", "ws"] }
-tower-http = { version = "0.6.7", features = ["cors", "trace", "timeout"] }
+tower-http = { version = "0.6.8", features = ["cors", "trace", "timeout"] }
 
 # Async runtime
 tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "signal"] }
@@ -37,6 +37,7 @@ dotenvy = "0.15.7"
 # Custom crates
 s3 = { path = "s3" }
 kafka = { path = "kafka" }
+scylladb = { path = "scylladb" }
 
 # Tests
 testcontainers-modules = { version = "0.14.0", features = ["kafka", "minio"] }
