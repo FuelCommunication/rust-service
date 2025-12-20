@@ -12,6 +12,7 @@ async fn main() {
             [header::CONTENT_TYPE, header::ACCEPT],
         )
         .with_tracing()
+        .with_prometheus()
         .run()
         .await;
 }

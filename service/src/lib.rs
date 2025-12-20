@@ -7,13 +7,15 @@ use api::{
     images::router::{delete_image, download_image, upload_image},
     not_found, ping,
 };
-use axum::{Router, extract::DefaultBodyLimit, routing};
+use axum::{Router, extract::DefaultBodyLimit, http::StatusCode, routing};
 use kafka::{
     config::{ConsumerConfig, LogLevel, ProducerConfig},
     consumer::KafkaConsumer,
     producer::KafkaProducer,
 };
+use mimalloc::MiMalloc;
 use s3::S3;
+use scylladb::ChatMessageStore;
 use state::{KafkaState, ServerData, ServerState};
 use std::{sync::Arc, time::Duration};
 use tokio::net::TcpListener;
@@ -22,7 +24,9 @@ use tower_http::{
     timeout::TimeoutLayer,
     trace::TraceLayer,
 };
-use tracing_subscriber::EnvFilter;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 pub struct ServerBuilder {
     tcp_listener: TcpListener,
@@ -38,8 +42,8 @@ impl ServerBuilder {
     }
 
     pub async fn init_tcp_listener() -> TcpListener {
-        let host = read_env_var("HOST");
-        let port = read_env_var("PORT");
+        let host = read_env_var("HOST", "0.0.0.0");
+        let port = read_env_var("PORT", "3000");
         let addr = format!("{host}:{port}");
 
         TcpListener::bind(addr).await.expect("the address is busy")
@@ -57,16 +61,43 @@ impl ServerBuilder {
             .fallback(not_found)
             .layer((
                 TraceLayer::new_for_http(),
-                TimeoutLayer::new(Duration::from_secs(10)),
+                TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(10)),
                 DefaultBodyLimit::max(2 * 1024 * 1024),
             ))
+    }
+
+    async fn init_state() -> ServerState {
+        let access_key = read_env_var("ACCESS_KEY", "admin");
+        let secret_key = read_env_var("SECRET_KEY", "admin12345");
+        let region = read_env_var("REGION", "us-east-1");
+        let endpoint_url = read_env_var("ENDPOINT_URL", "http://localhost:9000");
+        let bucket: &'static str = Box::leak(read_env_var("BUCKET", "my-bucket").into_boxed_str());
+        let s3 = S3::new(access_key, secret_key, region, endpoint_url, bucket).await;
+
+        let brokers = read_env_var("BROKERS", "127.0.0.1:9092");
+        let topic = read_env_var("TOPIC", "images");
+        let group_id = read_env_var("GROUP_ID", "rust-service");
+        let producer_config = ProducerConfig::new(&brokers, &topic).expect("Invalid producer config");
+        let consumer_config = ConsumerConfig::new(brokers, group_id, topic, LogLevel::Debug).expect("Invalid consumer config");
+        let producer = KafkaProducer::new(producer_config).unwrap();
+        let consumer = KafkaConsumer::new(consumer_config).unwrap();
+        let broker = KafkaState { producer, consumer };
+
+        let scylla_url = read_env_var("SCYLLA_URL", "127.0.0.1:9042");
+        let message_store = ChatMessageStore::new(scylla_url).await.unwrap();
+
+        Arc::new(ServerData {
+            s3,
+            broker,
+            message_store,
+        })
     }
 
     pub fn with_cors<M: Into<AllowMethods>, H: Into<AllowHeaders>>(mut self, methods: M, headers: H) -> Self {
         use axum::http::HeaderValue;
         use tower_http::cors::CorsLayer;
 
-        let origins = read_env_var("ORIGINS")
+        let origins = read_env_var("ORIGINS", "[http://localhost:8080,http://127.0.0.1:8080]")
             .split(',')
             .map(|s| s.trim())
             .map(|s| HeaderValue::from_str(s).expect("Invalid origin in ORIGINS"))
@@ -81,27 +112,9 @@ impl ServerBuilder {
         self
     }
 
-    async fn init_state() -> ServerState {
-        let access_key = read_env_var("ACCESS_KEY");
-        let secret_key = read_env_var("SECRET_KEY");
-        let region = read_env_var("REGION");
-        let endpoint_url = read_env_var("ENDPOINT_URL");
-        let bucket: &'static str = Box::leak(read_env_var("BUCKET").into_boxed_str());
-        let s3 = S3::new(access_key, secret_key, region, endpoint_url, bucket).await;
-
-        let brokers = read_env_var("BROKERS");
-        let topic = read_env_var("TOPIC");
-        let group_id = read_env_var("GROUP_ID");
-        let producer_config = ProducerConfig::new(&brokers, &topic).expect("Invalid producer config");
-        let consumer_config = ConsumerConfig::new(brokers, group_id, topic, LogLevel::Debug).expect("Invalid consumer config");
-        let producer = KafkaProducer::new(producer_config).unwrap();
-        let consumer = KafkaConsumer::new(consumer_config).unwrap();
-        let kafka = KafkaState { producer, consumer };
-
-        Arc::new(ServerData { s3, kafka })
-    }
-
     pub fn with_tracing(self) -> Self {
+        use tracing_subscriber::EnvFilter;
+
         tracing_subscriber::fmt()
             .with_env_filter(EnvFilter::from_default_env())
             .compact()
@@ -113,8 +126,20 @@ impl ServerBuilder {
         self
     }
 
+    pub fn with_prometheus(mut self) -> Self {
+        use axum_prometheus::PrometheusMetricLayer;
+
+        let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
+        self.router = self
+            .router
+            .route("/metrics", routing::get(|| async move { metric_handle.render() }))
+            .layer(prometheus_layer);
+
+        self
+    }
+
     pub async fn run(self) {
-        tracing::info!("listening on http{}", self.tcp_listener.local_addr().unwrap());
+        tracing::info!("listening on http://{}", self.tcp_listener.local_addr().unwrap());
 
         axum::serve(self.tcp_listener, self.router)
             .with_graceful_shutdown(shutdown_signal())
@@ -123,8 +148,8 @@ impl ServerBuilder {
     }
 }
 
-fn read_env_var(key: &str) -> String {
-    std::env::var(key).unwrap_or_else(|_| panic!("{key} don`t set"))
+fn read_env_var(key: &str, default: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
 async fn shutdown_signal() {
