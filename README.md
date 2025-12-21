@@ -1,19 +1,19 @@
 # Rust service
-Stack: axum, tokio, tower-http, serde-json, tracing
+Stack: axum, tokio, tower-http, serde, tracing, aws-sdk-s3, rdkafka, scylla
 
 ## Start service
 Locally:
-```shell
-cargo run --release
+```bash
+ RUST_LOG=info cargo run --release
 ```
 
 In docker container:
-```shell
+```bash
 docker build -t rust-server .
-docker run --rm -p 3000:3000 rust-server
+docker run --rm -p 3000:3000 -v $(pwd)/.env:/app/.env rust-service
 ```
 
 ## Ping server
-```shell
+```bash
 curl http://127.0.0.1:3000/ping
 ```
