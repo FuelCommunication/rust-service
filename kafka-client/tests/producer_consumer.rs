@@ -1,5 +1,5 @@
-use kafka::{
-    config::{ConsumerConfig, LogLevel, ProducerConfig},
+use kafka_client::{
+    config::{ConsumerConfig, ProducerConfig},
     consumer::KafkaConsumer,
     producer::KafkaProducer,
     schemas::{Action, KafkaMessage},
@@ -13,10 +13,12 @@ async fn test_producer_consumer_integration() -> anyhow::Result<()> {
     let port = kafka.get_host_port_ipv4(9093).await?;
     let brokers = format!("{}:{}", host, port);
 
-    let producer_config = ProducerConfig::new(brokers.clone(), "integration-test")?;
+    let producer_config = ProducerConfig::builder(&brokers, "integration-test")
+        .auto_create_topics(true)
+        .build()?;
     let producer = KafkaProducer::new(producer_config)?;
 
-    let consumer_config = ConsumerConfig::new(brokers, "test-group", "integration-test", LogLevel::Info)?;
+    let consumer_config = ConsumerConfig::builder(&brokers, "test-group", "integration-test").build()?;
     let consumer = KafkaConsumer::new(consumer_config)?;
 
     let test_message = KafkaMessage {
@@ -25,8 +27,8 @@ async fn test_producer_consumer_integration() -> anyhow::Result<()> {
         data: Some("integration data".to_string()),
     };
 
-    producer.send(&test_message).await?;
-    let received = consumer.consume().await?;
+    producer.send(&test_message.user_id, &test_message).await?;
+    let received = consumer.consume::<KafkaMessage>().await?;
 
     assert_eq!(received.user_id, "integration_user");
     assert_eq!(received.action, Action::Create);

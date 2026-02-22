@@ -1,4 +1,4 @@
-use kafka::schemas::{Action, KafkaMessage};
+use kafka_client::schemas::{Action, KafkaMessage};
 use serde::{Deserialize, Serialize};
 
 #[test]
