@@ -1,0 +1,19 @@
+[package]
+name = "s3-client"
+version = "0.1.0"
+edition.workspace = true
+readme.workspace = true
+license.workspace = true
+
+[dependencies]
+aws-sdk-s3 = "1.122.0"
+aws-config = { version = "1.8.13", features = ["behavior-version-latest"] }
+aws-credential-types = { version = "1.2.11", features = ["hardcoded-credentials"] }
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+testcontainers-modules.workspace = true
+anyhow.workspace = true

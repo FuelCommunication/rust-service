@@ -1,6 +1,6 @@
 pub mod error;
 
-use aws_config::Region;
+use aws_config::{Region, retry::RetryConfig, timeout::TimeoutConfig};
 use aws_sdk_s3::{
     Client,
     config::Credentials,
@@ -10,10 +10,15 @@ use aws_sdk_s3::{
     types::{CompletedMultipartUpload, CompletedPart, Delete, ObjectIdentifier},
 };
 use error::{S3Error, S3Result};
-use std::{borrow::Cow, path::Path};
+use std::{borrow::Cow, path::Path, time::Duration};
 use tokio::{fs::File, io::AsyncReadExt as _};
 
 const DEFAULT_CHUNK_SIZE: usize = 5 * 1024 * 1024; // 5MB
+
+pub struct S3Object {
+    pub data: Vec<u8>,
+    pub content_type: Option<String>,
+}
 
 pub struct S3 {
     client: Client,
@@ -28,20 +33,40 @@ impl S3 {
         endpoint_url: impl Into<String>,
         bucket: impl Into<&'static str>,
     ) -> Self {
+        let region = region.into();
+        let endpoint_url = endpoint_url.into();
+        let bucket = bucket.into();
+
+        tracing::info!(
+            endpoint = %endpoint_url,
+            region = %region,
+            bucket = %bucket,
+            "Initializing S3 client"
+        );
+
         let creds = Credentials::new(access_key, secret_key, None, None, "loaded-from-custom-env");
+        let retry_config = RetryConfig::standard().with_max_attempts(5);
+        let timeout_config = TimeoutConfig::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .read_timeout(Duration::from_secs(30))
+            .operation_attempt_timeout(Duration::from_secs(60))
+            .build();
+
         let cfg = aws_sdk_s3::config::Builder::new()
             .endpoint_url(endpoint_url)
             .credentials_provider(creds)
             .region(Region::new(region))
+            .retry_config(retry_config)
+            .timeout_config(timeout_config)
             .force_path_style(true)
             .behavior_version_latest()
             .build();
 
         let client = Client::from_conf(cfg);
-        Self {
-            client,
-            bucket: bucket.into(),
-        }
+
+        tracing::info!(bucket = %bucket, "S3 client initialized");
+
+        Self { client, bucket }
     }
 
     pub fn bucket(&self) -> &str {
@@ -102,16 +127,17 @@ impl S3 {
         content_type: impl Into<String>,
     ) -> S3Result<()> {
         let key = key.into();
-        let body = body.into();
-        let size = body.bytes().unwrap_or_default().len();
         let content_type = content_type.into();
+        let data = body.into().collect().await.map_err(S3Error::from)?.into_bytes();
+        let size = data.len();
 
         self.client
             .put_object()
             .bucket(self.bucket)
             .content_type(&content_type)
+            .content_length(size as i64)
             .key(&key)
-            .body(body)
+            .body(ByteStream::from(data))
             .send()
             .await?;
 
@@ -119,12 +145,13 @@ impl S3 {
         Ok(())
     }
 
-    pub async fn download(&self, key: impl Into<String>) -> S3Result<Vec<u8>> {
+    pub async fn download(&self, key: impl Into<String>) -> S3Result<S3Object> {
         let key = key.into();
         let object = self.client.get_object().bucket(self.bucket).key(&key).send().await?;
-        let body = object.body.collect().await.map_err(S3Error::from)?.to_vec();
-        tracing::info!("File downloaded: {}, size: {} bytes", key, body.len());
-        Ok(body)
+        let content_type = object.content_type().map(String::from);
+        let data = object.body.collect().await.map_err(S3Error::from)?.to_vec();
+        tracing::info!("File downloaded: {}, size: {} bytes", key, data.len());
+        Ok(S3Object { data, content_type })
     }
 
     pub async fn delete_object(&self, key: impl Into<String>) -> S3Result<()> {
@@ -309,12 +336,22 @@ impl S3 {
         let mut part_number = 1;
 
         loop {
-            let read_bytes = file.read(&mut buffer).await?;
-            if read_bytes == 0 {
+            let mut total_read = 0;
+            loop {
+                let n = file.read(&mut buffer[total_read..]).await?;
+                if n == 0 {
+                    break;
+                }
+                total_read += n;
+                if total_read == chunk_size {
+                    break;
+                }
+            }
+            if total_read == 0 {
                 break;
             }
 
-            let data = buffer[..read_bytes].to_vec();
+            let data = buffer[..total_read].to_vec();
             match self.upload_part(&key, &upload_id, part_number, data.into()).await {
                 Ok((part_num, e_tag)) => {
                     tracing::debug!(
