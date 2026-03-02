@@ -1,0 +1,27 @@
+[package]
+name = "service-images"
+version = "0.1.0"
+edition.workspace = true
+readme.workspace = true
+license.workspace = true
+
+[dependencies]
+axum.workspace = true
+axum-prometheus.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+dotenvy.workspace = true
+thiserror.workspace = true
+mimalloc.workspace = true
+
+s3-client.workspace = true
+kafka-client.workspace = true
+
+[dev-dependencies]
+axum-test.workspace = true
+testcontainers-modules.workspace = true
+anyhow.workspace = true
