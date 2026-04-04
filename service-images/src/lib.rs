@@ -56,7 +56,7 @@ impl ServerBuilder {
     pub fn init_router(state: ServerState) -> Router {
         Router::new()
             .route("/ping", routing::get(ping))
-            .route("/images/upload/{user_id}", routing::post(upload_image))
+            .route("/images/upload", routing::post(upload_image))
             .route("/images/{filename}", routing::get(download_image).delete(delete_image))
             .with_state(state)
             .fallback(not_found)

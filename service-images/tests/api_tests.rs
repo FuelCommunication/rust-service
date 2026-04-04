@@ -89,14 +89,19 @@ async fn test_not_found_fallback() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_upload_jpeg_success() -> anyhow::Result<()> {
     let ctx = setup().await?;
-    let user_id = uuid::Uuid::now_v7();
+    let user_id = uuid::Uuid::now_v7().to_string();
 
     let part = Part::bytes(vec![0xFF, 0xD8, 0xFF, 0xE0])
         .file_name("test.jpg")
         .mime_type("image/jpeg");
     let form = MultipartForm::new().add_part("file", part);
 
-    let response = ctx.server.post(&format!("/images/upload/{}", user_id)).multipart(form).await;
+    let response = ctx
+        .server
+        .post("/images/upload")
+        .add_header("X-User-Id", user_id)
+        .multipart(form)
+        .await;
 
     response.assert_status(axum::http::StatusCode::CREATED);
     let body: serde_json::Value = response.json();
@@ -107,14 +112,19 @@ async fn test_upload_jpeg_success() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_upload_png_success() -> anyhow::Result<()> {
     let ctx = setup().await?;
-    let user_id = uuid::Uuid::now_v7();
+    let user_id = uuid::Uuid::now_v7().to_string();
 
     let part = Part::bytes(vec![0x89, 0x50, 0x4E, 0x47])
         .file_name("test.png")
         .mime_type("image/png");
     let form = MultipartForm::new().add_part("file", part);
 
-    let response = ctx.server.post(&format!("/images/upload/{}", user_id)).multipart(form).await;
+    let response = ctx
+        .server
+        .post("/images/upload")
+        .add_header("X-User-Id", user_id)
+        .multipart(form)
+        .await;
 
     response.assert_status(axum::http::StatusCode::CREATED);
     Ok(())
@@ -123,14 +133,19 @@ async fn test_upload_png_success() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_upload_unsupported_content_type() -> anyhow::Result<()> {
     let ctx = setup().await?;
-    let user_id = uuid::Uuid::now_v7();
+    let user_id = uuid::Uuid::now_v7().to_string();
 
     let part = Part::bytes(b"not an image".to_vec())
         .file_name("test.txt")
         .mime_type("text/plain");
     let form = MultipartForm::new().add_part("file", part);
 
-    let response = ctx.server.post(&format!("/images/upload/{}", user_id)).multipart(form).await;
+    let response = ctx
+        .server
+        .post("/images/upload")
+        .add_header("X-User-Id", user_id)
+        .multipart(form)
+        .await;
 
     response.assert_status(axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE);
     Ok(())
@@ -145,7 +160,12 @@ async fn test_upload_invalid_user_id() -> anyhow::Result<()> {
         .mime_type("image/jpeg");
     let form = MultipartForm::new().add_part("file", part);
 
-    let response = ctx.server.post("/images/upload/not-a-uuid").multipart(form).await;
+    let response = ctx
+        .server
+        .post("/images/upload")
+        .add_header("X-User-Id", "not-a-uuid")
+        .multipart(form)
+        .await;
 
     response.assert_status(axum::http::StatusCode::BAD_REQUEST);
     Ok(())
@@ -154,13 +174,18 @@ async fn test_upload_invalid_user_id() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_upload_and_download() -> anyhow::Result<()> {
     let ctx = setup().await?;
-    let user_id = uuid::Uuid::now_v7();
+    let user_id = uuid::Uuid::now_v7().to_string();
 
     let image_data = b"fake png content for testing".to_vec();
     let part = Part::bytes(image_data.clone()).file_name("test.png").mime_type("image/png");
     let form = MultipartForm::new().add_part("file", part);
 
-    let upload_response = ctx.server.post(&format!("/images/upload/{}", user_id)).multipart(form).await;
+    let upload_response = ctx
+        .server
+        .post("/images/upload")
+        .add_header("X-User-Id", user_id)
+        .multipart(form)
+        .await;
     upload_response.assert_status(axum::http::StatusCode::CREATED);
 
     let body: serde_json::Value = upload_response.json();
@@ -200,20 +225,29 @@ async fn test_download_invalid_filename() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_delete_after_upload() -> anyhow::Result<()> {
     let ctx = setup().await?;
-    let user_id = uuid::Uuid::now_v7();
+    let user_id = uuid::Uuid::now_v7().to_string();
 
     let part = Part::bytes(b"delete me".to_vec())
         .file_name("test.gif")
         .mime_type("image/gif");
     let form = MultipartForm::new().add_part("file", part);
 
-    let upload_response = ctx.server.post(&format!("/images/upload/{}", user_id)).multipart(form).await;
+    let upload_response = ctx
+        .server
+        .post("/images/upload")
+        .add_header("X-User-Id", &user_id)
+        .multipart(form)
+        .await;
     upload_response.assert_status(axum::http::StatusCode::CREATED);
 
     let body: serde_json::Value = upload_response.json();
     let filename = body["filename"].as_str().unwrap();
 
-    let delete_response = ctx.server.delete(&format!("/images/{}", filename)).await;
+    let delete_response = ctx
+        .server
+        .delete(&format!("/images/{}", filename))
+        .add_header("X-User-Id", &user_id)
+        .await;
     delete_response.assert_status_ok();
 
     let delete_body: serde_json::Value = delete_response.json();
@@ -228,7 +262,12 @@ async fn test_delete_after_upload() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_delete_nonexistent() -> anyhow::Result<()> {
     let ctx = setup().await?;
-    let response = ctx.server.delete("/images/does-not-exist-uuid").await;
+    let user_id = uuid::Uuid::now_v7().to_string();
+    let response = ctx
+        .server
+        .delete("/images/does-not-exist-uuid")
+        .add_header("X-User-Id", user_id)
+        .await;
 
     response.assert_status_not_found();
     Ok(())
@@ -237,7 +276,8 @@ async fn test_delete_nonexistent() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_delete_invalid_filename() -> anyhow::Result<()> {
     let ctx = setup().await?;
-    let response = ctx.server.delete("/images/bad..name").await;
+    let user_id = uuid::Uuid::now_v7().to_string();
+    let response = ctx.server.delete("/images/bad..name").add_header("X-User-Id", user_id).await;
 
     response.assert_status(axum::http::StatusCode::BAD_REQUEST);
     Ok(())
