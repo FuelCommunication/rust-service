@@ -1,0 +1,18 @@
+services:
+  scylladb:
+    container_name: chats-scylladb
+    image: scylladb/scylla:6.2
+    restart: unless-stopped
+    ports:
+      - "9042:9042"
+    command: --smp 1 --memory 512M --overprovisioned 1
+    volumes:
+      - scylla_data:/var/lib/scylla
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'SELECT now() FROM system.local'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  scylla_data:
