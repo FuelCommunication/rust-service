@@ -1,6 +1,7 @@
 # Image service
 
 HTTP microservice for image upload, download, and deletion. Uses S3-compatible storage (RustFS) and Kafka for event notifications
+Stack: axum, tokio, tower-http, serde-json, tracing, thiserror, mimalloc, s3-client and kafka-client
 
 ## Features
 
