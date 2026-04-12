@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) as \"count!\"\n             FROM channels c\n             INNER JOIN channel_subscribers cs ON cs.channel_id = c.id\n             WHERE cs.user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d171044e61381829102ef36798381842552e465c058e22f04bebb898c2dcdcdd"
+}

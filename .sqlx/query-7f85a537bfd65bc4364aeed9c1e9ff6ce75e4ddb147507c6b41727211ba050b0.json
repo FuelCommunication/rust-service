@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.id, c.title, c.description, c.avatar_url,\n                    COUNT(cs_all.id) as \"subscribers_count!\"\n             FROM channels c\n             INNER JOIN channel_subscribers cs ON cs.channel_id = c.id AND cs.user_id = $1\n             INNER JOIN channel_subscribers cs_all ON cs_all.channel_id = c.id\n             GROUP BY c.id, c.title, c.description, c.avatar_url\n             ORDER BY c.title\n             LIMIT $2 OFFSET $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "description",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "avatar_url",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "subscribers_count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "7f85a537bfd65bc4364aeed9c1e9ff6ce75e4ddb147507c6b41727211ba050b0"
+}
