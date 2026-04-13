@@ -6,9 +6,6 @@ readme.workspace = true
 license.workspace = true
 
 [dependencies]
-dashmap = "6"
-futures-util = "0.3"
-
 axum.workspace = true
 axum-prometheus.workspace = true
 tokio.workspace = true
@@ -22,4 +19,6 @@ uuid.workspace = true
 dotenvy.workspace = true
 thiserror.workspace = true
 mimalloc.workspace = true
+dashmap.workspace = true
+futures-util.workspace = true
 scylladb-client.workspace = true

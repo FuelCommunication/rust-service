@@ -396,7 +396,7 @@ async fn test_expire_and_ttl() -> anyhow::Result<()> {
 
     client.set_raw("exp", "v").await?;
     let ttl_before = client.ttl("exp").await?;
-    assert_eq!(ttl_before, -1); // no expiry
+    assert_eq!(ttl_before, -1);
 
     client.expire("exp", 120).await?;
     let ttl_after = client.ttl("exp").await?;
