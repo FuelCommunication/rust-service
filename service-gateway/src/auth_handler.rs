@@ -6,31 +6,57 @@ use pingora::prelude::{HTTPStatus, Session};
 use serde::{Deserialize, Serialize};
 use tonic::transport::Channel;
 
-use crate::config::Config;
-use crate::proto::auth_service_client::AuthServiceClient;
-use crate::proto;
-use crate::PingoraResult;
+use crate::{
+    PingoraResult,
+    config::Config,
+    proto::{self, auth_service_client::AuthServiceClient},
+};
 
 const GRPC_TIMEOUT: Duration = Duration::from_secs(10);
 
-fn urldecode(s: &str) -> String {
+pub struct AuthContext<'a> {
+    pub origin: Option<&'a str>,
+    pub allowed_origins: &'a [String],
+    pub request_id: &'a str,
+    pub max_body_size: usize,
+    pub config: &'a Config,
+}
+
+fn urldecode(s: &str) -> Option<String> {
     let mut result = Vec::with_capacity(s.len());
-    let mut chars = s.bytes();
-    while let Some(b) = chars.next() {
+    let mut bytes = s.bytes();
+    while let Some(b) = bytes.next() {
         if b == b'%' {
-            let hi = chars.next().unwrap_or(0);
-            let lo = chars.next().unwrap_or(0);
-            if let (Some(h), Some(l)) = (hex_val(hi), hex_val(lo)) {
-                result.push(h << 4 | l);
-            }
+            let hi = bytes.next().and_then(hex_val)?;
+            let lo = bytes.next().and_then(hex_val)?;
+            result.push(hi << 4 | lo);
         } else if b == b'+' {
             result.push(b' ');
         } else {
             result.push(b);
         }
     }
-    String::from_utf8(result).unwrap_or_default()
+    String::from_utf8(result).ok()
 }
+
+fn urlencode(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                result.push(b as char);
+            }
+            _ => {
+                result.push('%');
+                result.push(char::from(HEX_CHARS[(b >> 4) as usize]));
+                result.push(char::from(HEX_CHARS[(b & 0x0F) as usize]));
+            }
+        }
+    }
+    result
+}
+
+const HEX_CHARS: [u8; 16] = *b"0123456789ABCDEF";
 
 fn hex_val(b: u8) -> Option<u8> {
     match b {
@@ -40,8 +66,6 @@ fn hex_val(b: u8) -> Option<u8> {
         _ => None,
     }
 }
-
-// ── Request DTOs ──
 
 #[derive(Deserialize)]
 struct LoginBody {
@@ -65,8 +89,6 @@ struct RefreshBody {
 struct LogoutBody {
     refresh_token: String,
 }
-
-// ─��� Response DTOs ──
 
 #[derive(Serialize)]
 struct UserDto {
@@ -99,8 +121,6 @@ struct ErrorDto {
     error: String,
 }
 
-// ── Helpers ──
-
 async fn read_full_body(session: &mut Session, max_size: usize) -> Result<bytes::Bytes, String> {
     let mut buf = BytesMut::new();
     loop {
@@ -126,21 +146,16 @@ async fn respond_json<T: Serialize>(
     allowed_origins: &[String],
     request_id: &str,
 ) -> PingoraResult<bool> {
-    let json = serde_json::to_vec(body).map_err(|e| {
-        pingora::Error::explain(HTTPStatus(500), format!("JSON serialization error: {e}"))
-    })?;
+    let json = serde_json::to_vec(body)
+        .map_err(|e| pingora::Error::explain(HTTPStatus(500), format!("JSON serialization error: {e}")))?;
 
     let mut header = ResponseHeader::build(status, None)?;
     header.insert_header("Content-Type", "application/json")?;
     header.insert_header("Content-Length", json.len().to_string())?;
     header.insert_header("X-Request-Id", request_id)?;
     crate::insert_cors_headers(&mut header, origin, allowed_origins)?;
-    session
-        .write_response_header(Box::new(header), false)
-        .await?;
-    session
-        .write_response_body(Some(bytes::Bytes::from(json)), true)
-        .await?;
+    session.write_response_header(Box::new(header), false).await?;
+    session.write_response_body(Some(bytes::Bytes::from(json)), true).await?;
     Ok(true)
 }
 
@@ -165,11 +180,7 @@ async fn respond_error(
     .await
 }
 
-async fn respond_redirect(
-    session: &mut Session,
-    location: &str,
-    request_id: &str,
-) -> PingoraResult<bool> {
+async fn respond_redirect(session: &mut Session, location: &str, request_id: &str) -> PingoraResult<bool> {
     let mut header = ResponseHeader::build(302, None)?;
     header.insert_header("Location", location)?;
     header.insert_header("X-Request-Id", request_id)?;
@@ -189,48 +200,136 @@ fn grpc_status_to_http(code: tonic::Code) -> u16 {
     }
 }
 
-fn tokens_to_session(tokens: &proto::AuthTokens) -> SessionDto {
+fn tokens_to_session(tokens: &proto::AuthTokens) -> Result<SessionDto, &'static str> {
     let now = chrono::Utc::now().timestamp();
-    let access_expires_at = tokens.access_expires_at.as_ref().map(|t| t.seconds).unwrap_or(0);
-    SessionDto {
+    let access_expires_at = tokens
+        .access_expires_at
+        .as_ref()
+        .map(|t| t.seconds)
+        .ok_or("Auth response missing token expiry")?;
+
+    Ok(SessionDto {
         access_token: tokens.access_token.clone(),
         token_type: "Bearer".to_string(),
         refresh_token: tokens.refresh_token.clone(),
         expires_in: access_expires_at - now,
+    })
+}
+
+async fn post_grpc_handler<B, R, F, Fut>(
+    session: &mut Session,
+    auth_client: &AuthServiceClient<Channel>,
+    ctx: &AuthContext<'_>,
+    handler: F,
+) -> PingoraResult<bool>
+where
+    B: serde::de::DeserializeOwned,
+    F: FnOnce(AuthServiceClient<Channel>, B) -> Fut,
+    Fut: std::future::Future<Output = Result<R, tonic::Status>>,
+    R: HandleResult,
+{
+    let body = match read_full_body(session, ctx.max_body_size).await {
+        Ok(b) => b,
+        Err(e) => return respond_error(session, 400, &e, ctx.origin, ctx.allowed_origins, ctx.request_id).await,
+    };
+
+    let parsed: B = match serde_json::from_slice(&body) {
+        Ok(b) => b,
+        Err(e) => {
+            return respond_error(
+                session,
+                400,
+                &format!("Invalid JSON: {e}"),
+                ctx.origin,
+                ctx.allowed_origins,
+                ctx.request_id,
+            )
+            .await;
+        }
+    };
+
+    let client = auth_client.clone();
+    match handler(client, parsed).await {
+        Ok(result) => result.into_response(session, ctx).await,
+        Err(status) => {
+            let http_code = grpc_status_to_http(status.code());
+            respond_error(
+                session,
+                http_code,
+                status.message(),
+                ctx.origin,
+                ctx.allowed_origins,
+                ctx.request_id,
+            )
+            .await
+        }
     }
 }
 
-// ── Route dispatch ──
+trait HandleResult {
+    fn into_response(
+        self,
+        session: &mut Session,
+        ctx: &AuthContext<'_>,
+    ) -> impl std::future::Future<Output = PingoraResult<bool>> + Send;
+}
 
 pub async fn handle_auth_route(
     session: &mut Session,
     path: &str,
     method: &str,
     auth_client: &AuthServiceClient<Channel>,
-    max_body_size: usize,
-    origin: Option<&str>,
-    allowed_origins: &[String],
-    request_id: &str,
-    config: &Config,
+    ctx: &AuthContext<'_>,
 ) -> PingoraResult<bool> {
-    // OAuth routes (GET)
     if method == "GET" {
         return match path {
             "/access/oauth/google" => {
-                handle_oauth_start(session, auth_client, proto::OAuthProvider::OauthProviderGoogle, "google", config, request_id).await
+                handle_oauth_start(
+                    session,
+                    auth_client,
+                    proto::OAuthProvider::OauthProviderGoogle,
+                    "google",
+                    ctx.config,
+                    ctx.request_id,
+                )
+                .await
             }
             "/access/oauth/github" => {
-                handle_oauth_start(session, auth_client, proto::OAuthProvider::OauthProviderGithub, "github", config, request_id).await
+                handle_oauth_start(
+                    session,
+                    auth_client,
+                    proto::OAuthProvider::OauthProviderGithub,
+                    "github",
+                    ctx.config,
+                    ctx.request_id,
+                )
+                .await
             }
-            "/access/oauth/callback" => {
-                handle_oauth_callback(session, auth_client, config, request_id).await
+            "/access/oauth/callback" => handle_oauth_callback(session, auth_client, ctx.config, ctx.request_id).await,
+            _ => {
+                respond_error(
+                    session,
+                    405,
+                    "Method not allowed",
+                    ctx.origin,
+                    ctx.allowed_origins,
+                    ctx.request_id,
+                )
+                .await
             }
-            _ => respond_error(session, 405, "Method not allowed", origin, allowed_origins, request_id).await,
         };
     }
 
     if method != "POST" {
-        return respond_error(session, 405, "Method not allowed", origin, allowed_origins, request_id).await;
+        return respond_error(
+            session,
+            405,
+            "Method not allowed",
+            ctx.origin,
+            ctx.allowed_origins,
+            ctx.request_id,
+        )
+        .await;
     }
 
     let content_type = session
@@ -239,207 +338,200 @@ pub async fn handle_auth_route(
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if !content_type.starts_with("application/json") {
-        return respond_error(session, 415, "Content-Type must be application/json", origin, allowed_origins, request_id).await;
+    if !content_type.to_ascii_lowercase().starts_with("application/json") {
+        return respond_error(
+            session,
+            415,
+            "Content-Type must be application/json",
+            ctx.origin,
+            ctx.allowed_origins,
+            ctx.request_id,
+        )
+        .await;
     }
 
     match path {
-        "/access/login" => handle_login(session, auth_client, max_body_size, origin, allowed_origins, request_id).await,
-        "/access/register" => handle_register(session, auth_client, max_body_size, origin, allowed_origins, request_id).await,
-        "/access/refresh" => handle_refresh(session, auth_client, max_body_size, origin, allowed_origins, request_id).await,
-        "/access/logout" => handle_logout(session, auth_client, max_body_size, origin, allowed_origins, request_id).await,
-        _ => respond_error(session, 404, "Not found", origin, allowed_origins, request_id).await,
+        "/access/login" => handle_login(session, auth_client, ctx).await,
+        "/access/register" => handle_register(session, auth_client, ctx).await,
+        "/access/refresh" => handle_refresh(session, auth_client, ctx).await,
+        "/access/logout" => handle_logout(session, auth_client, ctx).await,
+        _ => respond_error(session, 404, "Not found", ctx.origin, ctx.allowed_origins, ctx.request_id).await,
     }
 }
 
-// ── Route handlers ──
+struct AuthUserResult {
+    user_id: String,
+    email: String,
+    username: String,
+    tokens: Option<proto::AuthTokens>,
+    status: u16,
+}
+
+struct TokensResult(proto::AuthTokens);
+struct NoContent;
+
+impl HandleResult for AuthUserResult {
+    async fn into_response(self, session: &mut Session, ctx: &AuthContext<'_>) -> PingoraResult<bool> {
+        let tokens = match self.tokens {
+            Some(t) => t,
+            None => {
+                tracing::error!("Auth response missing tokens");
+                return respond_error(
+                    session,
+                    500,
+                    "Internal server error",
+                    ctx.origin,
+                    ctx.allowed_origins,
+                    ctx.request_id,
+                )
+                .await;
+            }
+        };
+        let session_dto = match tokens_to_session(&tokens) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("{e}");
+                return respond_error(
+                    session,
+                    500,
+                    "Internal server error",
+                    ctx.origin,
+                    ctx.allowed_origins,
+                    ctx.request_id,
+                )
+                .await;
+            }
+        };
+        let response = AuthResponseDto {
+            user: UserDto {
+                id: self.user_id,
+                email: self.email,
+                username: self.username,
+                avatar_url: None,
+                bio: None,
+            },
+            session: session_dto,
+        };
+        respond_json(
+            session,
+            self.status,
+            &response,
+            ctx.origin,
+            ctx.allowed_origins,
+            ctx.request_id,
+        )
+        .await
+    }
+}
+
+impl HandleResult for TokensResult {
+    async fn into_response(self, session: &mut Session, ctx: &AuthContext<'_>) -> PingoraResult<bool> {
+        let session_dto = match tokens_to_session(&self.0) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("{e}");
+                return respond_error(
+                    session,
+                    500,
+                    "Internal server error",
+                    ctx.origin,
+                    ctx.allowed_origins,
+                    ctx.request_id,
+                )
+                .await;
+            }
+        };
+        respond_json(session, 200, &session_dto, ctx.origin, ctx.allowed_origins, ctx.request_id).await
+    }
+}
+
+impl HandleResult for NoContent {
+    async fn into_response(self, session: &mut Session, ctx: &AuthContext<'_>) -> PingoraResult<bool> {
+        let mut header = ResponseHeader::build(204, None)?;
+        header.insert_header("X-Request-Id", ctx.request_id)?;
+        crate::insert_cors_headers(&mut header, ctx.origin, ctx.allowed_origins)?;
+        session.write_response_header(Box::new(header), true).await?;
+        Ok(true)
+    }
+}
 
 async fn handle_login(
     session: &mut Session,
     auth_client: &AuthServiceClient<Channel>,
-    max_body_size: usize,
-    origin: Option<&str>,
-    allowed_origins: &[String],
-    request_id: &str,
+    ctx: &AuthContext<'_>,
 ) -> PingoraResult<bool> {
-    let body = match read_full_body(session, max_body_size).await {
-        Ok(b) => b,
-        Err(e) => return respond_error(session, 400, &e, origin, allowed_origins, request_id).await,
-    };
-
-    let login_body: LoginBody = match serde_json::from_slice(&body) {
-        Ok(b) => b,
-        Err(e) => return respond_error(session, 400, &format!("Invalid JSON: {e}"), origin, allowed_origins, request_id).await,
-    };
-
-    let mut client = auth_client.clone();
-
-    let mut req = tonic::Request::new(proto::LoginRequest {
-        email: login_body.email,
-        password: login_body.password,
-    });
-    req.set_timeout(GRPC_TIMEOUT);
-    let login_resp = match client.login(req).await {
-        Ok(resp) => resp.into_inner(),
-        Err(status) => {
-            let http_code = grpc_status_to_http(status.code());
-            return respond_error(session, http_code, status.message(), origin, allowed_origins, request_id).await;
-        }
-    };
-
-    let tokens = match login_resp.tokens {
-        Some(t) => t,
-        None => {
-            tracing::error!("Login response missing tokens");
-            return respond_error(session, 500, "Internal server error", origin, allowed_origins, request_id).await;
-        }
-    };
-
-    let response = AuthResponseDto {
-        user: UserDto {
-            id: login_resp.user_id,
-            email: login_resp.email,
-            username: login_resp.username,
-            avatar_url: None,
-            bio: None,
-        },
-        session: tokens_to_session(&tokens),
-    };
-
-    respond_json(session, 200, &response, origin, allowed_origins, request_id).await
+    post_grpc_handler(session, auth_client, ctx, |mut client, body: LoginBody| async move {
+        let mut req = tonic::Request::new(proto::LoginRequest {
+            email: body.email,
+            password: body.password,
+        });
+        req.set_timeout(GRPC_TIMEOUT);
+        let r = client.login(req).await?.into_inner();
+        Ok(AuthUserResult {
+            user_id: r.user_id,
+            email: r.email,
+            username: r.username,
+            tokens: r.tokens,
+            status: 200,
+        })
+    })
+    .await
 }
 
 async fn handle_register(
     session: &mut Session,
     auth_client: &AuthServiceClient<Channel>,
-    max_body_size: usize,
-    origin: Option<&str>,
-    allowed_origins: &[String],
-    request_id: &str,
+    ctx: &AuthContext<'_>,
 ) -> PingoraResult<bool> {
-    let body = match read_full_body(session, max_body_size).await {
-        Ok(b) => b,
-        Err(e) => return respond_error(session, 400, &e, origin, allowed_origins, request_id).await,
-    };
-
-    let register_body: RegisterBody = match serde_json::from_slice(&body) {
-        Ok(b) => b,
-        Err(e) => return respond_error(session, 400, &format!("Invalid JSON: {e}"), origin, allowed_origins, request_id).await,
-    };
-
-    let mut client = auth_client.clone();
-
-    let mut req = tonic::Request::new(proto::RegisterRequest {
-        email: register_body.email,
-        password: register_body.password,
-        username: register_body.username,
-    });
-    req.set_timeout(GRPC_TIMEOUT);
-    let register_resp = match client.register(req).await {
-        Ok(resp) => resp.into_inner(),
-        Err(status) => {
-            let http_code = grpc_status_to_http(status.code());
-            return respond_error(session, http_code, status.message(), origin, allowed_origins, request_id).await;
-        }
-    };
-
-    let tokens = match register_resp.tokens {
-        Some(t) => t,
-        None => {
-            tracing::error!("Register response missing tokens");
-            return respond_error(session, 500, "Internal server error", origin, allowed_origins, request_id).await;
-        }
-    };
-
-    let response = AuthResponseDto {
-        user: UserDto {
-            id: register_resp.user_id,
-            email: register_resp.email,
-            username: register_resp.username,
-            avatar_url: None,
-            bio: None,
-        },
-        session: tokens_to_session(&tokens),
-    };
-
-    respond_json(session, 201, &response, origin, allowed_origins, request_id).await
+    post_grpc_handler(session, auth_client, ctx, |mut client, body: RegisterBody| async move {
+        let mut req = tonic::Request::new(proto::RegisterRequest {
+            email: body.email,
+            password: body.password,
+            username: body.username,
+        });
+        req.set_timeout(GRPC_TIMEOUT);
+        let r = client.register(req).await?.into_inner();
+        Ok(AuthUserResult {
+            user_id: r.user_id,
+            email: r.email,
+            username: r.username,
+            tokens: r.tokens,
+            status: 201,
+        })
+    })
+    .await
 }
 
 async fn handle_refresh(
     session: &mut Session,
     auth_client: &AuthServiceClient<Channel>,
-    max_body_size: usize,
-    origin: Option<&str>,
-    allowed_origins: &[String],
-    request_id: &str,
+    ctx: &AuthContext<'_>,
 ) -> PingoraResult<bool> {
-    let body = match read_full_body(session, max_body_size).await {
-        Ok(b) => b,
-        Err(e) => return respond_error(session, 400, &e, origin, allowed_origins, request_id).await,
-    };
-
-    let refresh_body: RefreshBody = match serde_json::from_slice(&body) {
-        Ok(b) => b,
-        Err(e) => return respond_error(session, 400, &format!("Invalid JSON: {e}"), origin, allowed_origins, request_id).await,
-    };
-
-    let mut client = auth_client.clone();
-
-    let mut req = tonic::Request::new(proto::RefreshTokenRequest {
-        refresh_token: refresh_body.refresh_token,
-    });
-    req.set_timeout(GRPC_TIMEOUT);
-    let tokens = match client.refresh_token(req).await {
-        Ok(resp) => resp.into_inner(),
-        Err(status) => {
-            let http_code = grpc_status_to_http(status.code());
-            return respond_error(session, http_code, status.message(), origin, allowed_origins, request_id).await;
-        }
-    };
-
-    respond_json(session, 200, &tokens_to_session(&tokens), origin, allowed_origins, request_id).await
+    post_grpc_handler(session, auth_client, ctx, |mut client, body: RefreshBody| async move {
+        let mut req = tonic::Request::new(proto::RefreshTokenRequest {
+            refresh_token: body.refresh_token,
+        });
+        req.set_timeout(GRPC_TIMEOUT);
+        Ok(TokensResult(client.refresh_token(req).await?.into_inner()))
+    })
+    .await
 }
 
 async fn handle_logout(
     session: &mut Session,
     auth_client: &AuthServiceClient<Channel>,
-    max_body_size: usize,
-    origin: Option<&str>,
-    allowed_origins: &[String],
-    request_id: &str,
+    ctx: &AuthContext<'_>,
 ) -> PingoraResult<bool> {
-    let body = match read_full_body(session, max_body_size).await {
-        Ok(b) => b,
-        Err(e) => return respond_error(session, 400, &e, origin, allowed_origins, request_id).await,
-    };
-
-    let logout_body: LogoutBody = match serde_json::from_slice(&body) {
-        Ok(b) => b,
-        Err(e) => return respond_error(session, 400, &format!("Invalid JSON: {e}"), origin, allowed_origins, request_id).await,
-    };
-
-    let mut client = auth_client.clone();
-
-    let mut req = tonic::Request::new(proto::LogoutRequest {
-        refresh_token: logout_body.refresh_token,
-    });
-    req.set_timeout(GRPC_TIMEOUT);
-    match client.logout(req).await {
-        Ok(_) => {
-            let mut header = ResponseHeader::build(204, None)?;
-            header.insert_header("X-Request-Id", request_id)?;
-            crate::insert_cors_headers(&mut header, origin, allowed_origins)?;
-            session.write_response_header(Box::new(header), true).await?;
-            Ok(true)
-        }
-        Err(status) => {
-            let http_code = grpc_status_to_http(status.code());
-            respond_error(session, http_code, status.message(), origin, allowed_origins, request_id).await
-        }
-    }
+    post_grpc_handler(session, auth_client, ctx, |mut client, body: LogoutBody| async move {
+        let mut req = tonic::Request::new(proto::LogoutRequest {
+            refresh_token: body.refresh_token,
+        });
+        req.set_timeout(GRPC_TIMEOUT);
+        client.logout(req).await?;
+        Ok(NoContent)
+    })
+    .await
 }
-
-// ── OAuth handlers ──
 
 async fn handle_oauth_start(
     session: &mut Session,
@@ -483,7 +575,7 @@ async fn handle_oauth_callback(
     let mut provider_str = None;
     for param in query.split('&') {
         if let Some(v) = param.strip_prefix("code=") {
-            code = Some(urldecode(v));
+            code = urldecode(v);
         } else if let Some(v) = param.strip_prefix("provider=") {
             provider_str = Some(v.to_string());
         }
@@ -527,14 +619,27 @@ async fn handle_oauth_callback(
         }
     };
 
-    // Get user info via ValidateToken
     let mut validate_req = tonic::Request::new(proto::ValidateTokenRequest {
         access_token: tokens.access_token.clone(),
     });
     validate_req.set_timeout(GRPC_TIMEOUT);
-    let user_info = client.validate_token(validate_req).await.ok().map(|r| r.into_inner());
+    let user_info = match client.validate_token(validate_req).await {
+        Ok(resp) => Some(resp.into_inner()),
+        Err(status) => {
+            tracing::warn!("OAuth token validation failed: {status}");
+            None
+        }
+    };
 
-    let session_dto = tokens_to_session(&tokens);
+    let session_dto = match tokens_to_session(&tokens) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("{e}");
+            let location = format!("{}/?error=internal_error", config.frontend_url);
+            return respond_redirect(session, &location, request_id).await;
+        }
+    };
+
     let user_id = user_info.as_ref().map(|u| u.user_id.as_str()).unwrap_or("");
     let email = user_info.as_ref().map(|u| u.email.as_str()).unwrap_or("");
     let username = user_info.as_ref().map(|u| u.username.as_str()).unwrap_or("");
@@ -542,12 +647,12 @@ async fn handle_oauth_callback(
     let location = format!(
         "{}/account/oauth-callback#access_token={}&refresh_token={}&expires_in={}&user_id={}&email={}&username={}",
         config.frontend_url,
-        session_dto.access_token,
-        session_dto.refresh_token,
+        urlencode(&session_dto.access_token),
+        urlencode(&session_dto.refresh_token),
         session_dto.expires_in,
-        user_id,
-        email,
-        username,
+        urlencode(user_id),
+        urlencode(email),
+        urlencode(username),
     );
 
     respond_redirect(session, &location, request_id).await

@@ -46,6 +46,7 @@ pub struct RequestCtx {
     pub bytes_read: usize,
     pub request_id: String,
     pub is_grpc: bool,
+    pub origin: Option<String>,
     pub user_id: Option<String>,
     pub username: Option<String>,
     pub email: Option<String>,
@@ -60,6 +61,7 @@ pub struct Gateway {
     pub images_upstream: SocketAddr,
     pub chats_upstream: SocketAddr,
     pub channels_upstream: SocketAddr,
+    pub calls_upstream: SocketAddr,
     pub auth_upstream: SocketAddr,
     pub auth_endpoint: Endpoint,
     auth_client: OnceCell<AuthServiceClient<Channel>>,
@@ -71,6 +73,7 @@ impl Gateway {
         images_upstream: SocketAddr,
         chats_upstream: SocketAddr,
         channels_upstream: SocketAddr,
+        calls_upstream: SocketAddr,
         auth_upstream: SocketAddr,
         auth_endpoint: Endpoint,
         config: Arc<Config>,
@@ -79,6 +82,7 @@ impl Gateway {
             images_upstream,
             chats_upstream,
             channels_upstream,
+            calls_upstream,
             auth_upstream,
             auth_endpoint,
             auth_client: OnceCell::new(),
@@ -108,7 +112,6 @@ fn extract_token(session: &Session, path: &str) -> Option<String> {
         return Some(token.to_string());
     }
 
-    // Allow token in query string only for WebSocket routes (browsers can't set headers on WS)
     if path.starts_with("/ws")
         && let Some(query) = session.req_header().uri.query()
     {
@@ -171,6 +174,10 @@ impl Gateway {
                 addr: self.channels_upstream,
                 is_grpc: false,
             }),
+            p if p.starts_with("/rooms") => Ok(Upstream {
+                addr: self.calls_upstream,
+                is_grpc: false,
+            }),
             p if p.starts_with("/auth.") => Ok(Upstream {
                 addr: self.auth_upstream,
                 is_grpc: true,
@@ -196,6 +203,7 @@ impl ProxyHttp for Gateway {
             bytes_read: 0,
             request_id: Uuid::now_v7().to_string(),
             is_grpc: false,
+            origin: None,
             user_id: None,
             username: None,
             email: None,
@@ -243,7 +251,7 @@ impl ProxyHttp for Gateway {
             return Ok(true);
         }
 
-        let origin = session
+        ctx.origin = session
             .req_header()
             .headers
             .get("origin")
@@ -253,32 +261,26 @@ impl ProxyHttp for Gateway {
         let path = session.req_header().uri.path();
         let method = session.req_header().method.as_str();
 
-        // Handle CORS preflight for all routes
         if method == "OPTIONS" {
-            return respond_cors_preflight(session, origin.as_deref(), &self.config.allowed_origins).await;
+            return respond_cors_preflight(session, ctx.origin.as_deref(), &self.config.allowed_origins).await;
         }
 
-        // Intercept auth routes — handle directly via gRPC without proxying
         if path.starts_with("/access/") {
             let path = path.to_string();
             let method = method.to_string();
-            return auth_handler::handle_auth_route(
-                session,
-                &path,
-                &method,
-                self.get_auth_client().await,
-                self.config.max_body_size,
-                origin.as_deref(),
-                &self.config.allowed_origins,
-                &ctx.request_id,
-                &self.config,
-            )
-            .await;
+            let auth_ctx = auth_handler::AuthContext {
+                origin: ctx.origin.as_deref(),
+                allowed_origins: &self.config.allowed_origins,
+                request_id: &ctx.request_id,
+                max_body_size: self.config.max_body_size,
+                config: &self.config,
+            };
+            return auth_handler::handle_auth_route(session, &path, &method, self.get_auth_client().await, &auth_ctx).await;
         }
 
         if !is_public_route(path) {
             let Some(token) = extract_token(session, path) else {
-                return respond_unauthorized(session, origin.as_deref(), &self.config.allowed_origins, &ctx.request_id).await;
+                return respond_unauthorized(session, ctx.origin.as_deref(), &self.config.allowed_origins, &ctx.request_id).await;
             };
 
             let mut client = self.get_auth_client().await.clone();
@@ -294,7 +296,8 @@ impl ProxyHttp for Gateway {
                 }
                 Err(status) => {
                     tracing::warn!("Token validation failed: {}", status);
-                    return respond_unauthorized(session, origin.as_deref(), &self.config.allowed_origins, &ctx.request_id).await;
+                    return respond_unauthorized(session, ctx.origin.as_deref(), &self.config.allowed_origins, &ctx.request_id)
+                        .await;
                 }
             }
         }
@@ -337,15 +340,21 @@ impl ProxyHttp for Gateway {
             .map(|addr| addr.to_string())
             .unwrap_or_else(|| "unknown".to_string());
 
-        // Strip client-supplied internal headers to prevent spoofing
         upstream_request.remove_header("X-User-Id");
         upstream_request.remove_header("X-Username");
         upstream_request.remove_header("X-Email");
         upstream_request.remove_header("X-Request-Id");
 
+        let proto = session
+            .req_header()
+            .headers
+            .get("X-Forwarded-Proto")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("http");
+
         upstream_request.insert_header("X-Forwarded-For", &client_addr)?;
         upstream_request.insert_header("X-Real-IP", &client_addr)?;
-        upstream_request.insert_header("X-Forwarded-Proto", "http")?;
+        upstream_request.insert_header("X-Forwarded-Proto", proto)?;
         upstream_request.insert_header("X-Request-Id", &ctx.request_id)?;
 
         if let Some(ref user_id) = ctx.user_id {
@@ -373,17 +382,11 @@ impl ProxyHttp for Gateway {
 
     async fn upstream_response_filter(
         &self,
-        session: &mut Session,
+        _session: &mut Session,
         upstream_response: &mut ResponseHeader,
         ctx: &mut Self::CTX,
     ) -> PingoraResult<()> {
-        let origin = session
-            .req_header()
-            .headers
-            .get("origin")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-        insert_cors_headers(upstream_response, origin.as_deref(), &self.config.allowed_origins)?;
+        insert_cors_headers(upstream_response, ctx.origin.as_deref(), &self.config.allowed_origins)?;
         upstream_response.insert_header("X-Request-Id", &ctx.request_id)?;
         Ok(())
     }
@@ -418,7 +421,7 @@ impl ProxyHttp for Gateway {
 
     fn fail_to_connect(&self, _session: &mut Session, _peer: &HttpPeer, _ctx: &mut Self::CTX, e: Box<Error>) -> Box<Error> {
         tracing::error!(error = %e, "Failed to connect to upstream");
-        Error::explain(HTTPStatus(502), format!("Bad Gateway: {}", e))
+        Error::explain(HTTPStatus(502), "Bad Gateway")
     }
 
     fn error_while_proxy(
@@ -456,6 +459,7 @@ pub fn log_config(config: &Config) {
     tracing::info!("images upstream: {}", config.images_upstream);
     tracing::info!("chats upstream: {}", config.chats_upstream);
     tracing::info!("channels upstream: {}", config.channels_upstream);
+    tracing::info!("calls upstream: {}", config.calls_upstream);
     tracing::info!("auth upstream (gRPC): {}", config.auth_upstream);
     tracing::info!("max req/sec: {}", config.max_req_per_sec);
     tracing::info!("max body size: {} bytes", config.max_body_size);

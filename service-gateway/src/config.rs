@@ -3,6 +3,7 @@ pub struct Config {
     pub images_upstream: String,
     pub chats_upstream: String,
     pub channels_upstream: String,
+    pub calls_upstream: String,
     pub auth_upstream: String,
     pub max_req_per_sec: isize,
     pub max_body_size: usize,
@@ -24,6 +25,7 @@ impl Config {
             images_upstream: read_env_var("GATEWAY_IMAGES_UPSTREAM"),
             chats_upstream: read_env_var("GATEWAY_CHATS_UPSTREAM"),
             channels_upstream: read_env_var("GATEWAY_CHANNELS_UPSTREAM"),
+            calls_upstream: read_env_var("GATEWAY_CALLS_UPSTREAM"),
             auth_upstream: read_env_var("GATEWAY_AUTH_UPSTREAM"),
             max_req_per_sec: read_env_var("GATEWAY_MAX_REQ_PER_SEC")
                 .parse()

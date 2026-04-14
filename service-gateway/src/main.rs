@@ -26,6 +26,7 @@ fn main() -> PingoraResult<()> {
         parse_upstream(&config.images_upstream),
         parse_upstream(&config.chats_upstream),
         parse_upstream(&config.channels_upstream),
+        parse_upstream(&config.calls_upstream),
         parse_upstream(&config.auth_upstream),
         auth_endpoint,
         Arc::clone(&config),
