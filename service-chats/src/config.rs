@@ -7,6 +7,9 @@ pub struct Config {
     pub broadcast_buffer_size: usize,
     pub channels_service_url: String,
     pub scylla_replication_factor: u8,
+    pub kafka_brokers: String,
+    pub kafka_topic: String,
+    pub kafka_group_id: String,
 }
 
 impl Config {
@@ -24,6 +27,9 @@ impl Config {
             scylla_replication_factor: read_env_var_or("SCYLLA_REPLICATION_FACTOR", "1")
                 .parse()
                 .expect("SCYLLA_REPLICATION_FACTOR must be a number"),
+            kafka_brokers: read_env_var("KAFKA_BROKERS"),
+            kafka_topic: read_env_var_or("KAFKA_TOPIC", "channels"),
+            kafka_group_id: read_env_var_or("KAFKA_GROUP_ID", "service-chats"),
         }
     }
 }
@@ -47,6 +53,9 @@ impl Default for Config {
             broadcast_buffer_size: 128,
             channels_service_url: "http://127.0.0.1:8082".into(),
             scylla_replication_factor: 1,
+            kafka_brokers: "localhost:9092".into(),
+            kafka_topic: "channels".into(),
+            kafka_group_id: "service-chats".into(),
         }
     }
 }

@@ -21,3 +21,4 @@ thiserror.workspace = true
 dotenvy.workspace = true
 mimalloc.workspace = true
 valkey-client.workspace = true
+kafka-client.workspace = true
