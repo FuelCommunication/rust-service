@@ -1,7 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["s3", "service", "kafka", "scylladb", "service-proxy"]
-default-members = ["service"]
+members = ["s3-client", "service-images", "service-chats", "service-calls", "kafka-client", "scylladb-client", "valkey-client", "service-gateway", "service-auth", "service-channels"]
 
 [workspace.package]
 edition = "2024"
@@ -10,40 +9,58 @@ license = "MIT"
 
 [workspace.dependencies]
 # HTTP stack
-axum = { version = "0.8.7", features = ["multipart", "macros", "ws"] }
-tower-http = { version = "0.6.8", features = ["cors", "trace", "timeout"] }
+axum = { version = "0.8", features = ["multipart", "macros", "ws"] }
+axum-prometheus = "0.10"
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono"] }
+
+# gRPC stack
+tonic = "0.14"
+tonic-prost = "*"
+tonic-prost-build = "*"
+prost = "0.14"
+prost-types = "0.14"
 
 # Async runtime
-tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1.51", features = ["rt-multi-thread", "macros", "signal"] }
+
+# HTTP client
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls"] }
 
 # Observability
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # JSON serialization
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # Other
 mimalloc = { version = "*", features = ["v3"] }
-uuid = { version = "1.19.0", features = ["v7", "serde"] }
-chrono = {version =  "0.4.42", features = ["serde"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+chrono = {version =  "0.4", features = ["serde"] }
+dashmap = "6"
+futures-util = "0.3"
 
 # Errors
-thiserror = "2.0.17"
+thiserror = "2"
 
 # Env varible
-dotenvy = "0.15.7"
+dotenvy = "0.15"
 
 # Custom crates
-s3 = { path = "s3" }
-kafka = { path = "kafka" }
-scylladb = { path = "scylladb" }
+s3-client = { path = "s3-client" }
+kafka-client = { path = "kafka-client" }
+scylladb-client = { path = "scylladb-client" }
+valkey-client = { path = "valkey-client" }
 
 # Tests
-testcontainers-modules = { version = "0.14.0", features = ["kafka", "minio"] }
-anyhow = "1.0.100"
-tempfile = "3.23.0"
+axum-test = "20"
+testcontainers-modules = { version = "0.15.0", features = ["kafka", "minio", "valkey"] }
+anyhow = "1"
+tempfile = "3"
 
 [profile.release]
 lto = "fat"
