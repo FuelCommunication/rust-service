@@ -2,15 +2,10 @@ use axum_test::{
     TestServer,
     multipart::{MultipartForm, Part},
 };
-use kafka_client::{
-    config::{ConsumerConfig, ProducerConfig},
-    consumer::KafkaConsumer,
-    producer::KafkaProducer,
-};
 use s3_client::S3;
 use service_images::{
     ServerBuilder,
-    state::{KafkaState, ServerData, ServerState},
+    state::{ServerData, ServerState},
 };
 use std::sync::Arc;
 use testcontainers_modules::{
@@ -44,18 +39,7 @@ async fn setup() -> anyhow::Result<TestContext> {
     let kafka_port = kafka.get_host_port_ipv4(9093).await?;
     let brokers = format!("{}:{}", kafka_host, kafka_port);
 
-    let producer_config = ProducerConfig::builder(&brokers, KAFKA_TOPIC)
-        .auto_create_topics(true)
-        .build()?;
-    let consumer_config = ConsumerConfig::builder(&brokers, "test-group", KAFKA_TOPIC).build()?;
-
-    let producer = KafkaProducer::new(producer_config)?;
-    let consumer = KafkaConsumer::new(consumer_config)?;
-
-    let state: ServerState = Arc::new(ServerData {
-        s3,
-        broker: KafkaState { producer, consumer },
-    });
+    let state: ServerState = Arc::new(ServerData { s3 });
 
     let router = ServerBuilder::init_router(state);
     let server = TestServer::new(router);

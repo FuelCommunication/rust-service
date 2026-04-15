@@ -5,7 +5,6 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use kafka_client::error::KafkaError;
 use s3_client::error::S3Error;
 use serde_json::json;
 
@@ -52,8 +51,6 @@ pub enum ApiError {
     Http(#[from] HttpError),
     #[error("S3 error: {0}")]
     S3(Box<S3Error>),
-    #[error("Kafka error: {0}")]
-    Kafka(#[from] KafkaError),
 }
 
 impl IntoResponse for ApiError {
@@ -61,7 +58,6 @@ impl IntoResponse for ApiError {
         match self {
             ApiError::Http(e) => e.into_response(),
             ApiError::S3(e) => s3_error_response(*e),
-            ApiError::Kafka(e) => kafka_error_response(e),
         }
     }
 }
@@ -91,17 +87,5 @@ fn s3_error_response(err: S3Error) -> Response {
         "message": err.to_string(),
     }));
 
-    (status, body).into_response()
-}
-
-fn kafka_error_response(err: KafkaError) -> Response {
-    let (status, e) = match &err {
-        KafkaError::RDKafka(_) | KafkaError::Kafka(_) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
-        KafkaError::Serialization(_) | KafkaError::CanceledMessage(_) => (StatusCode::BAD_REQUEST, err.to_string()),
-        KafkaError::EmptyPayload { .. } => (StatusCode::BAD_REQUEST, err.to_string()),
-        KafkaError::InvalidConfig(_) => (StatusCode::CONFLICT, err.to_string()),
-    };
-
-    let body = Json(json!({"error": e}));
     (status, body).into_response()
 }

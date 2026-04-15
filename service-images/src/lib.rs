@@ -11,7 +11,7 @@ use axum::{Router, http::StatusCode, routing};
 use config::Config;
 use mimalloc::MiMalloc;
 use state::ServerState;
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tower_http::{
     cors::{AllowHeaders, AllowMethods},
@@ -19,23 +19,20 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::state::ServerData;
-
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
 pub struct ServerBuilder {
     tcp_listener: TcpListener,
     router: Router,
-    state: ServerState,
     config: Config,
 }
 
 impl ServerBuilder {
     pub async fn new(config: Config) -> Self {
         let tcp_listener = Self::init_tcp_listener(&config).await;
-        let state = ServerData::new(&config).await;
-        let router = Self::init_router(state.clone()).layer((
+        let state = state::ServerData::new(&config).await;
+        let router = Self::init_router(state).layer((
             TraceLayer::new_for_http(),
             TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(10)),
         ));
@@ -43,7 +40,6 @@ impl ServerBuilder {
         Self {
             tcp_listener,
             router,
-            state,
             config,
         }
     }
@@ -116,18 +112,6 @@ impl ServerBuilder {
             .with_graceful_shutdown(shutdown_signal())
             .await?;
 
-        match Arc::try_unwrap(self.state) {
-            Ok(data) => {
-                data.broker.consumer.close().await;
-            }
-            Err(arc) => {
-                tracing::warn!(
-                    "Cannot take ownership of state (ref_count={}), Kafka clients will be dropped",
-                    Arc::strong_count(&arc)
-                );
-            }
-        }
-
         tracing::info!("Graceful shutdown complete");
         Ok(())
     }
@@ -150,12 +134,8 @@ async fn shutdown_signal() {
     let terminate = std::future::pending::<()>();
 
     tokio::select! {
-        _ = ctrl_c => {
-            tracing::info!("Received Ctrl+C signal");
-        },
-        _ = terminate => {
-            tracing::info!("Received terminate signal");
-        },
+        _ = ctrl_c => tracing::info!("Received Ctrl+C signal"),
+        _ = terminate => tracing::info!("Received terminate signal"),
     }
 
     tracing::info!("Starting graceful shutdown");
