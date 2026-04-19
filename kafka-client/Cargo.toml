@@ -1,21 +1,19 @@
 [package]
-name = "kafka"
+name = "kafka-client"
 version = "0.1.0"
 edition.workspace = true
 readme.workspace = true
 license.workspace = true
 
 [dependencies]
-rdkafka = {version = "0.38.0", features = ["cmake-build"]}
-futures = "0.3.31"
+rdkafka = {version = "0.39.0", features = ["cmake-build", "tracing", "zstd"]}
+futures = "0.3"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-axum.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
 testcontainers-modules.workspace = true
 anyhow.workspace = true
-
