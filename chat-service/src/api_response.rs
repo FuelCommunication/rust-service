@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use axum::{
     Json,
     http::StatusCode,
@@ -5,28 +7,26 @@ use axum::{
 };
 use serde_json::json;
 
-pub type ApiResult<T> = Result<T, ApiError>;
+pub type ApiResult<T, E = ApiError> = Result<T, E>;
 
 #[derive(Debug)]
 pub enum ApiError {
-    BadRequest,
-    Forbidden,
-    NotFound,
-    RequestTimeout,
+    BadRequest(String),
+    Forbidden(String),
+    NotFound(String),
     InternalServerError(String),
     NotImplemented,
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let (status, err) = match self {
-            Self::BadRequest => (StatusCode::BAD_REQUEST, "Bad request".to_owned()),
-            Self::Forbidden => (StatusCode::FORBIDDEN, "Forbidden".to_owned()),
-            Self::NotFound => (StatusCode::NOT_FOUND, "Recurse not found".to_owned()),
-            Self::RequestTimeout => (StatusCode::REQUEST_TIMEOUT, "Request timeout".to_owned()),
+        let (status, e) = match self {
+            Self::BadRequest(e) => (StatusCode::BAD_REQUEST, e),
+            Self::Forbidden(e) => (StatusCode::FORBIDDEN, e),
+            Self::NotFound(e) => (StatusCode::NOT_FOUND, e),
             Self::NotImplemented => (StatusCode::NOT_IMPLEMENTED, "Not implemented".to_owned()),
-            Self::InternalServerError(err) => {
-                tracing::error!("Internal server error: {}", err);
+            Self::InternalServerError(e) => {
+                tracing::error!("Internal server error: {}", e);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Internal Server Error".to_owned(),
@@ -34,7 +34,7 @@ impl IntoResponse for ApiError {
             }
         };
 
-        let body = Json(json!({"error": err}));
+        let body = Json(json!({"error": e}));
         (status, body.to_owned()).into_response()
     }
 }
