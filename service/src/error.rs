@@ -20,7 +20,7 @@ pub enum HttpError {
     #[error("Not found: {0}")]
     NotFound(String),
     #[error("Internal server error: {0}")]
-    InternalServerError(String),
+    Internal(String),
     #[error("Not implemented")]
     NotImplemented,
     #[error("Not implemented")]
@@ -35,7 +35,7 @@ impl IntoResponse for HttpError {
             Self::NotFound(e) => (StatusCode::NOT_FOUND, e),
             Self::NotImplemented => (StatusCode::NOT_IMPLEMENTED, "Not implemented".to_owned()),
             Self::UnsupportedMediaType => (StatusCode::UNSUPPORTED_MEDIA_TYPE, "Unsupported media type".to_owned()),
-            Self::InternalServerError(e) => {
+            Self::Internal(e) => {
                 tracing::error!("Internal server error: {}", e);
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error".to_owned())
             }
