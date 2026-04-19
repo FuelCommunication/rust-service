@@ -1,6 +1,7 @@
 # Auth service
 
 gRPC authentication microservice. Handles user registration, login, JWT token management, and OAuth 2.0 flows
+Stack: tonic, prost, tokio, reqwest, sqlx, serde, tracing, thiserror, mimalloc, argon2 and jsonwebtoken
 
 ## Features
 

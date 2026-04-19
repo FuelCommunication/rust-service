@@ -1,6 +1,7 @@
 # Chat service
 
 WebSocket real-time chat microservice. Handles messaging, message editing/deletion, typing indicators, and chat history via ScyllaDB
+Stack: axum, tokio, tower-http, reqwest, serde-json, tracing, thiserror, mimalloc and scylladb-client
 
 ## Features
 
