@@ -10,11 +10,7 @@ pub struct KafkaMessage<T = String> {
 
 impl<T> KafkaMessage<T> {
     pub fn new(user_id: String, action: Action, data: Option<T>) -> Self {
-        Self {
-            user_id,
-            action,
-            data,
-        }
+        Self { user_id, action, data }
     }
 }
 

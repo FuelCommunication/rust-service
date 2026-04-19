@@ -16,8 +16,7 @@ async fn test_producer_consumer_integration() -> anyhow::Result<()> {
     let producer_config = ProducerConfig::new(brokers.clone(), "integration-test")?;
     let producer = KafkaProducer::new(producer_config)?;
 
-    let consumer_config =
-        ConsumerConfig::new(brokers, "test-group", "integration-test", LogLevel::Info)?;
+    let consumer_config = ConsumerConfig::new(brokers, "test-group", "integration-test", LogLevel::Info)?;
     let consumer = KafkaConsumer::new(consumer_config)?;
 
     let test_message = KafkaMessage {
