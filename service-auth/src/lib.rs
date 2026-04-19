@@ -57,8 +57,6 @@ impl ServerBuilder {
             .await
             .expect("Failed to connect to PostgreSQL");
 
-        sqlx::migrate!().run(&pool).await.expect("Failed to run database migrations");
-
         let store = AuthStore::new(pool);
         let tokens = Arc::new(TokenManager::new(
             &config.jwt_secret,

@@ -5,14 +5,18 @@ services:
     restart: unless-stopped
     ports:
       - "5432:5432"
-    env_file:
-      - .env
     environment:
       POSTGRES_DB: fuel_auth
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+    volumes:
+      - auth-data:/var/lib/postgresql/data
+      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+volumes:
+  auth-data:
