@@ -1,9 +1,6 @@
 mod api;
 mod middleware;
 
-use bytes::Bytes;
-use http_body_util::combinators::BoxBody;
-use hyper::{Method, Request, Response, body::Incoming, server::conn::http1};
 use hyper_util::rt::TokioTimer;
 use middleware::logger::Logger;
 use std::net::SocketAddr;
@@ -27,15 +24,6 @@ impl ServerBuilder {
         }
     }
 
-    async fn init_router(
-        req: Request<Incoming>,
-    ) -> api::ApiResult<Response<BoxBody<Bytes, hyper::Error>>> {
-        match (req.method(), req.uri().path()) {
-            (&Method::GET, "/ping") => api::ping(req).await,
-            _ => Ok(api::not_found()),
-        }
-    }
-
     pub fn init_tracing(self, level: Level) -> Self {
         tracing_subscriber::fmt()
             .with_max_level(level)
@@ -56,9 +44,9 @@ impl ServerBuilder {
             let io = hyper_util::rt::TokioIo::new(stream);
 
             tokio::task::spawn(async move {
-                let svc = hyper::service::service_fn(Self::init_router);
+                let svc = hyper::service::service_fn(api::init_routers);
                 let svc = ServiceBuilder::new().layer_fn(Logger::new).service(svc);
-                let mut http = http1::Builder::new();
+                let mut http = hyper::server::conn::http1::Builder::new();
 
                 if let Err(err) = http
                     .timer(TokioTimer::new())
