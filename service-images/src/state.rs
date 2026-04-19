@@ -1,8 +1,3 @@
-use kafka_client::{
-    config::{ConsumerConfig, LogLevel, ProducerConfig},
-    consumer::KafkaConsumer,
-    producer::KafkaProducer,
-};
 use s3_client::S3;
 use std::sync::Arc;
 
@@ -12,12 +7,6 @@ pub type ServerState = Arc<ServerData>;
 
 pub struct ServerData {
     pub s3: S3,
-    pub broker: KafkaState,
-}
-
-pub struct KafkaState {
-    pub producer: KafkaProducer,
-    pub consumer: KafkaConsumer,
 }
 
 impl ServerData {
@@ -32,23 +21,6 @@ impl ServerData {
         )
         .await;
 
-        let producer_config = ProducerConfig::builder(&config.kafka.brokers, &config.kafka.topic)
-            .auto_create_topics(true)
-            .build()
-            .expect("Invalid producer config");
-        let consumer_config = ConsumerConfig::builder(
-            config.kafka.brokers.clone(),
-            config.kafka.group_id.clone(),
-            config.kafka.topic.clone(),
-        )
-        .log_level(LogLevel::Debug)
-        .build()
-        .expect("Invalid consumer config");
-
-        let producer = KafkaProducer::new(producer_config).unwrap();
-        let consumer = KafkaConsumer::new(consumer_config).unwrap();
-        let broker = KafkaState { producer, consumer };
-
-        Arc::new(ServerData { s3, broker })
+        Arc::new(ServerData { s3 })
     }
 }

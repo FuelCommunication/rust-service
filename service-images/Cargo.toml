@@ -19,7 +19,6 @@ thiserror.workspace = true
 mimalloc.workspace = true
 
 s3-client.workspace = true
-kafka-client.workspace = true
 
 [dev-dependencies]
 axum-test.workspace = true

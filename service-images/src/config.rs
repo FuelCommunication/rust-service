@@ -3,7 +3,6 @@ pub struct Config {
     pub port: String,
     pub origins: String,
     pub s3: S3Config,
-    pub kafka: KafkaConfig,
 }
 
 pub struct S3Config {
@@ -12,12 +11,6 @@ pub struct S3Config {
     pub region: String,
     pub endpoint_url: String,
     pub bucket: String,
-}
-
-pub struct KafkaConfig {
-    pub brokers: String,
-    pub topic: String,
-    pub group_id: String,
 }
 
 impl Config {
@@ -32,11 +25,6 @@ impl Config {
                 region: read_env_var("REGION"),
                 endpoint_url: read_env_var("ENDPOINT_URL"),
                 bucket: read_env_var("BUCKET"),
-            },
-            kafka: KafkaConfig {
-                brokers: read_env_var("BROKERS"),
-                topic: read_env_var("TOPIC"),
-                group_id: read_env_var("GROUP_ID"),
             },
         }
     }
@@ -58,11 +46,6 @@ impl Default for Config {
                 region: "us-east-1".into(),
                 endpoint_url: "http://localhost:9000".into(),
                 bucket: "my-bucket".into(),
-            },
-            kafka: KafkaConfig {
-                brokers: "127.0.0.1:9092".into(),
-                topic: "images".into(),
-                group_id: "rust-service".into(),
             },
         }
     }
