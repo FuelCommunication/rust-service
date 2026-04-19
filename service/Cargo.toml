@@ -1,5 +1,5 @@
 [package]
-name = "stream-service"
+name = "service"
 version = "0.1.0"
 license = "MIT"
 edition.workspace = true
