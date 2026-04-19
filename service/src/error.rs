@@ -23,6 +23,8 @@ pub enum HttpError {
     InternalServerError(String),
     #[error("Not implemented")]
     NotImplemented,
+    #[error("Not implemented")]
+    UnsupportedMediaType,
 }
 
 impl IntoResponse for HttpError {
@@ -32,12 +34,10 @@ impl IntoResponse for HttpError {
             Self::Forbidden(e) => (StatusCode::FORBIDDEN, e),
             Self::NotFound(e) => (StatusCode::NOT_FOUND, e),
             Self::NotImplemented => (StatusCode::NOT_IMPLEMENTED, "Not implemented".to_owned()),
+            Self::UnsupportedMediaType => (StatusCode::UNSUPPORTED_MEDIA_TYPE, "Unsupported media type".to_owned()),
             Self::InternalServerError(e) => {
                 tracing::error!("Internal server error: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal Server Error".to_owned(),
-                )
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error".to_owned())
             }
         };
 
@@ -51,7 +51,7 @@ pub enum ApiError {
     #[error("Http error: {0}")]
     Http(#[from] HttpError),
     #[error("S3 error: {0}")]
-    S3(#[from] S3Error),
+    S3(Box<S3Error>),
     #[error("Kafka error: {0}")]
     Kafka(#[from] KafkaError),
 }
@@ -63,5 +63,11 @@ impl IntoResponse for ApiError {
             ApiError::S3(e) => e.into_response(),
             ApiError::Kafka(e) => e.into_response(),
         }
+    }
+}
+
+impl From<S3Error> for ApiError {
+    fn from(err: S3Error) -> Self {
+        ApiError::S3(Box::new(err))
     }
 }

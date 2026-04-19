@@ -3,12 +3,13 @@ mod error;
 mod state;
 
 use api::{
+    chats::router::websocket_handler,
     images::router::{delete_image, download_image, upload_image},
     not_found, ping,
 };
-use axum::{Router, routing};
+use axum::{Router, extract::DefaultBodyLimit, routing};
 use kafka::{
-    config::{ConsumerConfig, ProducerConfig},
+    config::{ConsumerConfig, LogLevel, ProducerConfig},
     consumer::KafkaConsumer,
     producer::KafkaProducer,
 };
@@ -16,7 +17,11 @@ use s3::S3;
 use state::{KafkaState, ServerData, ServerState};
 use std::{sync::Arc, time::Duration};
 use tokio::net::TcpListener;
-use tower_http::{timeout::TimeoutLayer, trace::TraceLayer};
+use tower_http::{
+    cors::{AllowHeaders, AllowMethods},
+    timeout::TimeoutLayer,
+    trace::TraceLayer,
+};
 use tracing_subscriber::EnvFilter;
 
 pub struct ServerBuilder {
@@ -29,13 +34,10 @@ impl ServerBuilder {
         let tcp_listener = Self::init_tcp_listener().await;
         let router = Self::init_router().await;
 
-        Self {
-            tcp_listener,
-            router,
-        }
+        Self { tcp_listener, router }
     }
 
-    async fn init_tcp_listener() -> TcpListener {
+    pub async fn init_tcp_listener() -> TcpListener {
         let host = read_env_var("HOST");
         let port = read_env_var("PORT");
         let addr = format!("{host}:{port}");
@@ -43,29 +45,25 @@ impl ServerBuilder {
         TcpListener::bind(addr).await.expect("the address is busy")
     }
 
-    async fn init_router() -> Router {
+    pub async fn init_router() -> Router {
         let state = Self::init_state().await;
 
         Router::new()
             .route("/ping", routing::get(ping))
             .route("/images/upload/{user_id}", routing::post(upload_image))
-            .route(
-                "/images/{filename}",
-                routing::get(download_image).delete(delete_image),
-            )
+            .route("/images/{filename}", routing::get(download_image).delete(delete_image))
+            .route("/ws/{room}", routing::get(websocket_handler))
             .with_state(state)
             .fallback(not_found)
             .layer((
                 TraceLayer::new_for_http(),
                 TimeoutLayer::new(Duration::from_secs(10)),
+                DefaultBodyLimit::max(2 * 1024 * 1024),
             ))
     }
 
-    pub fn init_cors(mut self) -> Self {
-        use axum::http::{
-            HeaderValue, Method,
-            header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, ORIGIN},
-        };
+    pub fn with_cors<M: Into<AllowMethods>, H: Into<AllowHeaders>>(mut self, methods: M, headers: H) -> Self {
+        use axum::http::HeaderValue;
         use tower_http::cors::CorsLayer;
 
         let origins = read_env_var("ORIGINS")
@@ -75,14 +73,8 @@ impl ServerBuilder {
             .collect::<Vec<_>>();
 
         let cors = CorsLayer::new()
-            .allow_methods([
-                Method::GET,
-                Method::POST,
-                Method::PUT,
-                Method::PATCH,
-                Method::DELETE,
-            ])
-            .allow_headers([ORIGIN, AUTHORIZATION, ACCEPT, CONTENT_TYPE])
+            .allow_methods(methods)
+            .allow_headers(headers)
             .allow_origin(origins);
 
         self.router = self.router.layer(cors);
@@ -100,8 +92,8 @@ impl ServerBuilder {
         let brokers = read_env_var("BROKERS");
         let topic = read_env_var("TOPIC");
         let group_id = read_env_var("GROUP_ID");
-        let producer_config = ProducerConfig::new(&brokers, &topic);
-        let consumer_config = ConsumerConfig::new(brokers, group_id, topic, 0);
+        let producer_config = ProducerConfig::new(&brokers, &topic).expect("Invalid producer config");
+        let consumer_config = ConsumerConfig::new(brokers, group_id, topic, LogLevel::Debug).expect("Invalid consumer config");
         let producer = KafkaProducer::new(producer_config).unwrap();
         let consumer = KafkaConsumer::new(consumer_config).unwrap();
         let kafka = KafkaState { producer, consumer };
@@ -109,7 +101,7 @@ impl ServerBuilder {
         Arc::new(ServerData { s3, kafka })
     }
 
-    pub fn init_tracing(self) -> Self {
+    pub fn with_tracing(self) -> Self {
         tracing_subscriber::fmt()
             .with_env_filter(EnvFilter::from_default_env())
             .compact()
@@ -122,10 +114,7 @@ impl ServerBuilder {
     }
 
     pub async fn run(self) {
-        tracing::info!(
-            "listening on http{}",
-            self.tcp_listener.local_addr().unwrap()
-        );
+        tracing::info!("listening on http{}", self.tcp_listener.local_addr().unwrap());
 
         axum::serve(self.tcp_listener, self.router)
             .with_graceful_shutdown(shutdown_signal())
@@ -135,11 +124,33 @@ impl ServerBuilder {
 }
 
 fn read_env_var(key: &str) -> String {
-    std::env::var(key).expect(&format!("{key} don`t set"))
+    std::env::var(key).unwrap_or_else(|_| panic!("{key} don`t set"))
 }
 
 async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("failed to install Ctrl+C handler");
+    let ctrl_c = async {
+        tokio::signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            tracing::info!("Received Ctrl+C signal");
+        },
+        _ = terminate => {
+            tracing::info!("Received terminate signal");
+        },
+    }
+
+    tracing::info!("Starting graceful shutdown");
 }
