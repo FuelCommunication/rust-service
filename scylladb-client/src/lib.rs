@@ -7,7 +7,7 @@ use scylla::{
     client::{execution_profile::ExecutionProfileBuilder, session::Session, session_builder::SessionBuilder},
     observability::metrics::Metrics,
     policies::retry::DefaultRetryPolicy,
-    statement::{batch::Batch, prepared::PreparedStatement},
+    statement::{Consistency, batch::Batch, prepared::PreparedStatement},
     value::CqlTimestamp,
 };
 use serde::{Deserialize, Serialize};
@@ -61,7 +61,14 @@ pub struct ChatMessageStore {
 
 impl ChatMessageStore {
     pub async fn new(config: &ScyllaConfig, run_migrations: bool) -> ScyllaResult<Self> {
+        let consistency = if config.replication_factor <= 1 {
+            Consistency::One
+        } else {
+            Consistency::LocalQuorum
+        };
+
         let profile = ExecutionProfileBuilder::default()
+            .consistency(consistency)
             .retry_policy(Arc::new(DefaultRetryPolicy::new()))
             .build();
 
