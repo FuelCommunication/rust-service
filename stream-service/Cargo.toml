@@ -1,0 +1,21 @@
+[package]
+name = "stream-service"
+version = "0.1.0"
+license = "MIT"
+edition.workspace = true
+
+[dependencies]
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio.workspace = true
+tower.workspace = true
+
+[profile.release]
+strip = true
+lto = "fat"
+panic = 'abort'
