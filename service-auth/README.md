@@ -41,30 +41,28 @@ sqlx migrate run
 cargo run --release
 ```
 
-The gRPC server starts on port `50051` by default
-
 ## Environment variables
 
 | Variable                  | Required | Default | Description                         |
 | ------------------------- | -------- | ------- | ----------------------------------- |
-| `GRPC_PORT`               | yes      | —       | gRPC server port                    |
-| `DATABASE_URL`            | yes      | —       | PostgreSQL connection string        |
-| `JWT_SECRET`              | yes      | —       | Secret key for signing JWT tokens   |
-| `JWT_ACCESS_EXPIRATION`   | yes      | —       | Access token lifetime (seconds)     |
-| `JWT_REFRESH_EXPIRATION`  | yes      | —       | Refresh token lifetime (seconds)    |
+| `GRPC_PORT`               | yes      | -       | gRPC server port                    |
+| `DATABASE_URL`            | yes      | -       | PostgreSQL connection string        |
+| `JWT_SECRET`              | yes      | -       | Secret key for signing JWT tokens   |
+| `JWT_ACCESS_EXPIRATION`   | yes      | -       | Access token lifetime (seconds)     |
+| `JWT_REFRESH_EXPIRATION`  | yes      | -       | Refresh token lifetime (seconds)    |
 | `DB_MAX_CONNECTIONS`      | no       | 10      | Max database pool connections       |
 | `DB_MIN_CONNECTIONS`      | no       | 2       | Min database pool connections       |
 | `DB_ACQUIRE_TIMEOUT_SECS` | no       | 5       | Database connection acquire timeout |
-| `GOOGLE_CLIENT_ID`        | no       | —       | Google OAuth client ID              |
-| `GOOGLE_CLIENT_SECRET`    | no       | —       | Google OAuth client secret          |
-| `GITHUB_CLIENT_ID`        | no       | —       | GitHub OAuth client ID              |
-| `GITHUB_CLIENT_SECRET`    | no       | —       | GitHub OAuth client secret          |
+| `GOOGLE_CLIENT_ID`        | no       | -       | Google OAuth client ID              |
+| `GOOGLE_CLIENT_SECRET`    | no       | -       | Google OAuth client secret          |
+| `GITHUB_CLIENT_ID`        | no       | -       | GitHub OAuth client ID              |
+| `GITHUB_CLIENT_SECRET`    | no       | -       | GitHub OAuth client secret          |
 
 ## Database schema
 
-- **users** — user accounts (email, username, optional password for OAuth users)
-- **refresh_tokens** — active refresh tokens with expiration, max 10 per user
-- **oauth_accounts** — linked OAuth providers (Google, GitHub) per user
-- **channels** — communication channels
-- **channel_subscribers** — channel membership with ownership flag
-- **contacts** — user contact list
+- **users** - user accounts (email, username, optional password for OAuth users)
+- **refresh_tokens** - active refresh tokens with expiration, max 10 per user
+- **oauth_accounts** - linked OAuth providers (Google, GitHub) per user
+- **channels** - communication channels
+- **channel_subscribers** - channel membership with ownership flag
+- **contacts** - user contact list

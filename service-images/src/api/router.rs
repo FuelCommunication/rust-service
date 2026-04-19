@@ -24,11 +24,7 @@ fn extract_user_id(headers: &HeaderMap) -> Result<Uuid, HttpError> {
 }
 
 #[tracing::instrument(skip(state, headers, multipart))]
-pub async fn upload_image(
-    State(state): State<ServerState>,
-    headers: HeaderMap,
-    mut multipart: Multipart,
-) -> ApiResult<Image> {
+pub async fn upload_image(State(state): State<ServerState>, headers: HeaderMap, mut multipart: Multipart) -> ApiResult<Image> {
     let user_id = extract_user_id(&headers)?;
 
     let field = multipart

@@ -136,8 +136,7 @@ async fn test_copy_object() -> anyhow::Result<()> {
 async fn test_multipart_upload_and_download() -> anyhow::Result<()> {
     let (_minio, s3) = setup_s3().await?;
 
-    // S3 requires each part (except the last) to be at least 5MB
-    let chunk_size = 5 * 1024 * 1024; // 5MB
+    let chunk_size = 5 * 1024 * 1024;
     let data: Vec<u8> = (0..3 * chunk_size).map(|i| (i % 256) as u8).collect();
 
     let upload_file = NamedTempFile::new()?;
@@ -168,7 +167,6 @@ async fn test_multipart_upload_and_download() -> anyhow::Result<()> {
 async fn test_delete_bucket() -> anyhow::Result<()> {
     let (_minio, s3) = setup_s3().await?;
 
-    // Bucket must be empty to delete
     s3.delete_bucket().await?;
 
     Ok(())

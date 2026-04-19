@@ -45,7 +45,7 @@ cp .env.example .env
 cargo run --release
 ```
 
-The server starts on `0.0.0.0:3001` by default. RustFS console is available at `http://localhost:9001`
+RustFS console is available at `http://localhost:9001`
 
 ## Environment variables
 
