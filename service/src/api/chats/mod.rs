@@ -1,2 +1,2 @@
 pub mod router;
-pub mod schemas;
+pub(crate) mod schemas;
