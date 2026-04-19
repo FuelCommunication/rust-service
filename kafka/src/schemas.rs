@@ -8,6 +8,7 @@ pub struct KafkaMessage<T = String> {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Action {
     Create,
     Update,
