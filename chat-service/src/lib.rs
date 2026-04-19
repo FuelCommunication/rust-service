@@ -1,5 +1,5 @@
 mod api;
-mod api_response;
+mod error;
 mod state;
 
 use api::{
@@ -7,8 +7,13 @@ use api::{
     not_found, ping,
 };
 use axum::{Router, routing};
+use kafka::{
+    config::{ConsumerConfig, ProducerConfig},
+    consumer::KafkaConsumer,
+    producer::KafkaProducer,
+};
 use s3::S3;
-use state::{ServerData, ServerState};
+use state::{KafkaState, ServerData, ServerState};
 use std::{sync::Arc, time::Duration};
 use tokio::net::TcpListener;
 use tower_http::{timeout::TimeoutLayer, trace::TraceLayer};
@@ -43,7 +48,7 @@ impl ServerBuilder {
 
         Router::new()
             .route("/ping", routing::get(ping))
-            .route("/images/upload", routing::post(upload_image))
+            .route("/images/upload/{user_id}", routing::post(upload_image))
             .route(
                 "/images/{filename}",
                 routing::get(download_image).delete(delete_image),
@@ -92,7 +97,16 @@ impl ServerBuilder {
         let bucket: &'static str = Box::leak(read_env_var("BUCKET").into_boxed_str());
         let s3 = S3::new(access_key, secret_key, region, endpoint_url, bucket).await;
 
-        Arc::new(ServerData { s3 })
+        let brokers = read_env_var("BROKERS");
+        let topic = read_env_var("TOPIC");
+        let group_id = read_env_var("GROUP_ID");
+        let producer_config = ProducerConfig::new(&brokers, &topic);
+        let consumer_config = ConsumerConfig::new(brokers, group_id, topic, 0);
+        let producer = KafkaProducer::new(producer_config).unwrap();
+        let consumer = KafkaConsumer::new(consumer_config).unwrap();
+        let kafka = KafkaState { producer, consumer };
+
+        Arc::new(ServerData { s3, kafka })
     }
 
     pub fn init_tracing(self) -> Self {
