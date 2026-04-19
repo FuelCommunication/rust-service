@@ -9,12 +9,6 @@ use aws_sdk_s3::{
     },
     primitives::ByteStreamError,
 };
-use axum::{
-    Json,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
-use serde_json::json;
 use std::io;
 
 pub type S3Result<T> = Result<T, S3Error>;
@@ -61,38 +55,4 @@ pub enum S3Error {
     TokioJoin(String),
     #[error("Configuration error: {0}")]
     ConfigError(String),
-}
-
-impl IntoResponse for S3Error {
-    fn into_response(self) -> Response {
-        let (status, error_type, message) = match &self {
-            Self::GetObjectError(_) => (StatusCode::NOT_FOUND, "GetObjectError", self.to_string()),
-            Self::ListObjectError(_) => (StatusCode::BAD_REQUEST, "ListObjectError", self.to_string()),
-            Self::PutObjectError(_) => (StatusCode::BAD_REQUEST, "PutObjectError", self.to_string()),
-            Self::CopyObjectError(_) => (StatusCode::BAD_REQUEST, "CopyObjectError", self.to_string()),
-            Self::UploadPart(_) => (StatusCode::BAD_REQUEST, "UploadPartError", self.to_string()),
-            Self::CreateMultipart(_) => (StatusCode::BAD_REQUEST, "CreateMultipartError", self.to_string()),
-            Self::CompleteMultipart(_) => (StatusCode::BAD_REQUEST, "CompleteMultipartError", self.to_string()),
-            Self::AbortMultipart(_) => (StatusCode::BAD_REQUEST, "AbortMultipartError", self.to_string()),
-            Self::HeaderObjectError(_) => (StatusCode::NOT_FOUND, "HeadObjectError", self.to_string()),
-            Self::DeleteObjectError(_) => (StatusCode::BAD_REQUEST, "DeleteObjectError", self.to_string()),
-            Self::DeleteObjectsError(_) => (StatusCode::BAD_REQUEST, "DeleteObjectsError", self.to_string()),
-            Self::DeleteBucketError(_) => (StatusCode::BAD_REQUEST, "DeleteBucketError", self.to_string()),
-            Self::BucketNotEmpty => (StatusCode::CONFLICT, "BucketNotEmpty", self.to_string()),
-            Self::MissingETag => (StatusCode::INTERNAL_SERVER_ERROR, "MissingETag", self.to_string()),
-            Self::MissingUploadId => (StatusCode::INTERNAL_SERVER_ERROR, "MissingUploadId", self.to_string()),
-            Self::IO(_) => (StatusCode::INTERNAL_SERVER_ERROR, "IOError", self.to_string()),
-            Self::ByteStreamError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "ByteStreamError", self.to_string()),
-            Self::BuildError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "BuildError", self.to_string()),
-            Self::TokioJoin(_) => (StatusCode::INTERNAL_SERVER_ERROR, "TokioJoinError", self.to_string()),
-            Self::ConfigError(_) => (StatusCode::BAD_REQUEST, "ConfigError", self.to_string()),
-        };
-
-        let body = Json(json!({
-            "error": error_type,
-            "message": message,
-        }));
-
-        (status, body).into_response()
-    }
 }
