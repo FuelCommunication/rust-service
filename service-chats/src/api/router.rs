@@ -85,7 +85,7 @@ async fn websocket(room_id: String, stream: WebSocket, state: ServerState, user_
     send_history(&state, chat_id, &mut ws_sender).await;
 
     let (direct_tx, direct_rx) = mpsc::unbounded_channel();
-    let mut send_task = tokio::spawn(send_loop(rx, direct_rx, ws_sender));
+    let mut send_task = tokio::spawn(send_loop(rx, direct_rx, ws_sender, user_id));
     let mut recv_task = tokio::spawn(recv_loop(
         ws_receiver,
         state.clone(),
@@ -150,6 +150,7 @@ async fn send_loop(
     mut rx: broadcast::Receiver<ServerEvent>,
     mut direct_rx: mpsc::UnboundedReceiver<ServerEvent>,
     mut ws_sender: SplitSink<WebSocket, Message>,
+    user_id: Uuid,
 ) {
     loop {
         let event = tokio::select! {
@@ -166,6 +167,17 @@ async fn send_loop(
             Some(event) = direct_rx.recv() => event,
             else => break,
         };
+
+        match &event {
+            ServerEvent::Kicked { user_id: kicked_id } if *kicked_id != user_id => continue,
+            ServerEvent::Kicked { .. } | ServerEvent::ChannelDeleted => {
+                if let Ok(text) = serde_json::to_string(&event) {
+                    let _ = ws_sender.send(Message::Text(text.into())).await;
+                }
+                break;
+            }
+            _ => {}
+        }
 
         if let Ok(text) = serde_json::to_string(&event)
             && ws_sender.send(Message::Text(text.into())).await.is_err()

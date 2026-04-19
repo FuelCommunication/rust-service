@@ -1,11 +1,14 @@
 mod api;
 pub mod config;
 pub mod error;
+pub mod events;
 pub mod state;
 
-use api::{health, not_found, ping, router::websocket_handler};
+use api::{health, not_found, ping, router::websocket_handler, schemas::ServerEvent};
 use axum::{Router, http::StatusCode, routing};
 pub use config::Config;
+use events::ChannelEvent;
+use futures_util::StreamExt;
 use mimalloc::MiMalloc;
 use state::ServerState;
 use std::time::Duration;
@@ -14,6 +17,11 @@ use tower_http::{
     cors::{AllowHeaders, AllowMethods},
     timeout::TimeoutLayer,
     trace::TraceLayer,
+};
+use uuid::Uuid;
+use kafka_client::{
+    config::ConsumerConfig,
+    consumer::KafkaConsumer
 };
 
 use crate::state::ServerData;
@@ -31,13 +39,56 @@ impl ServerBuilder {
     pub async fn new(config: Config) -> Self {
         let tcp_listener = Self::init_tcp_listener(&config).await;
         let state = ServerData::new(&config).await;
-        let router = Self::init_router(state);
+        let router = Self::init_router(state.clone());
+
+        Self::spawn_kafka_consumer(&config, state);
 
         Self {
             tcp_listener,
             router,
             config,
         }
+    }
+
+    fn spawn_kafka_consumer(config: &Config, state: ServerState) {
+        let consumer_config = ConsumerConfig::builder(&config.kafka_brokers, &config.kafka_group_id, &config.kafka_topic)
+            .build()
+            .expect("Invalid Kafka consumer config");
+        let consumer = KafkaConsumer::new(consumer_config).expect("Failed to create Kafka consumer");
+
+        tokio::spawn(async move {
+            let stream = consumer.stream::<ChannelEvent>();
+            tokio::pin!(stream);
+            while let Some(result) = stream.next().await {
+                let event = match result {
+                    Ok(event) => event,
+                    Err(e) => {
+                        tracing::error!("Failed to consume Kafka event: {e}");
+                        continue;
+                    }
+                };
+
+                match event {
+                    ChannelEvent::ChannelDeleted { channel_id } => {
+                        if let Some(room) = state.rooms.get(&channel_id) {
+                            let _ = room.sender.send(ServerEvent::ChannelDeleted);
+                        }
+                        state.rooms.remove(&channel_id);
+                        tracing::info!("Channel {channel_id} deleted — room removed");
+                    }
+                    ChannelEvent::UserUnsubscribed { channel_id, user_id } => {
+                        if let Ok(uid) = user_id.parse::<Uuid>() {
+                            if let Some(room) = state.rooms.get(&channel_id) {
+                                let _ = room.sender.send(ServerEvent::Kicked { user_id: uid });
+                            }
+                            tracing::info!("User {user_id} unsubscribed from channel {channel_id}");
+                        }
+                    }
+                    ChannelEvent::ChannelUpdated { .. } | ChannelEvent::UserSubscribed { .. } => {}
+                }
+            }
+            tracing::warn!("Kafka consumer stream ended");
+        });
     }
 
     async fn init_tcp_listener(config: &Config) -> TcpListener {

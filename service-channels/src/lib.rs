@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+pub mod events;
 pub mod models;
 pub mod routes;
 pub mod schemas;
@@ -21,6 +22,9 @@ use tower_http::{
 };
 use tracing_subscriber::EnvFilter;
 use valkey_client::Valkey;
+
+use kafka_client::config::ProducerConfig;
+use kafka_client::producer::KafkaProducer;
 
 use crate::{
     config::Config,
@@ -75,12 +79,19 @@ impl ServerBuilder {
             .await
             .expect("Failed to initialize Meilisearch");
 
+        let kafka_config = ProducerConfig::builder(&config.kafka_brokers, &config.kafka_topic)
+            .auto_create_topics(true)
+            .build()
+            .expect("Invalid Kafka producer config");
+        let kafka = KafkaProducer::new(kafka_config).expect("Failed to create Kafka producer");
+
         let store = ChannelStore::new(pool);
         Arc::new(ServerData {
             store,
             cache,
             cache_ttl: config.cache_ttl_secs,
             search,
+            producer: kafka,
         })
     }
 

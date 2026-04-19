@@ -19,6 +19,8 @@ pub enum ServerEvent {
     Typing { user_id: Uuid, username: String },
     History { messages: Vec<MessagePayload> },
     Error { text: String },
+    ChannelDeleted,
+    Kicked { user_id: Uuid },
 }
 
 #[derive(Debug, Serialize, Clone)]

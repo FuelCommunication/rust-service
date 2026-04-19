@@ -10,6 +10,8 @@ pub struct Config {
     pub cache_ttl_secs: u64,
     pub meilisearch_url: String,
     pub meilisearch_api_key: Option<String>,
+    pub kafka_brokers: String,
+    pub kafka_topic: String,
 }
 
 impl Config {
@@ -34,6 +36,8 @@ impl Config {
                 .expect("CACHE_TTL_SECS must be a number"),
             meilisearch_url: read_env_var("MEILISEARCH_URL"),
             meilisearch_api_key: std::env::var("MEILISEARCH_API_KEY").ok().filter(|s| !s.is_empty()),
+            kafka_brokers: read_env_var("KAFKA_BROKERS"),
+            kafka_topic: read_env_var_or("KAFKA_TOPIC", "channels"),
         }
     }
 }

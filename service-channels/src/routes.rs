@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ApiResult},
+    events::ChannelEvent,
     schemas::{
         ChannelRead, ChannelReadPage, CreateChannel, PaginatedResponse, PaginationParams, SearchParams, SubscriberPage,
         SubscriptionPage, UpdateChannel,
@@ -212,6 +213,13 @@ pub async fn update_channel(
         .update_channel(read.id, &read.title, read.description.as_deref(), read.avatar_url.as_deref())
         .await;
 
+    let event = ChannelEvent::ChannelUpdated {
+        channel_id: channel_id.to_string(),
+    };
+    if let Err(e) = state.producer.send(&channel_id.to_string(), &event).await {
+        tracing::error!("Failed to publish channel update event: {e}");
+    }
+
     Ok(Json(read))
 }
 
@@ -237,6 +245,13 @@ pub async fn delete_channel(
     }
 
     state.search.delete_channel(channel_id).await;
+
+    let event = ChannelEvent::ChannelDeleted {
+        channel_id: channel_id.to_string(),
+    };
+    if let Err(e) = state.producer.send(&channel_id.to_string(), &event).await {
+        tracing::error!("Failed to publish channel deleted event: {e}");
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -283,6 +298,14 @@ pub async fn subscribe(
         .set_ex(&sub_key(user_id, channel_id), &true, state.cache_ttl)
         .await;
 
+    let event = ChannelEvent::UserSubscribed {
+        channel_id: channel_id.to_string(),
+        user_id: user_id.to_string(),
+    };
+    if let Err(e) = state.producer.send(&channel_id.to_string(), &event).await {
+        tracing::error!("Failed to publish user subscribed event: {e}");
+    }
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -295,6 +318,14 @@ pub async fn unsubscribe(
     let user_id = extract_user_id(&headers)?;
     state.store.unsubscribe(user_id, channel_id).await?;
     let _ = state.cache.del(&sub_key(user_id, channel_id)).await;
+
+    let event = ChannelEvent::UserUnsubscribed {
+        channel_id: channel_id.to_string(),
+        user_id: user_id.to_string(),
+    };
+    if let Err(e) = state.producer.send(&channel_id.to_string(), &event).await {
+        tracing::error!("Failed to publish user unsubscribed event: {e}");
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }

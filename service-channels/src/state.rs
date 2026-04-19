@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use kafka_client::producer::KafkaProducer;
 use valkey_client::Valkey;
 
 use crate::{search::SearchService, store::ChannelStore};
@@ -11,4 +12,5 @@ pub struct ServerData {
     pub cache: Valkey,
     pub cache_ttl: u64,
     pub search: SearchService,
+    pub producer: KafkaProducer,
 }
