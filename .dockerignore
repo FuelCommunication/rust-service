@@ -1,0 +1,8 @@
+.idea
+.vscode
+.claude
+target
+*.env*
+.gitignore
+README.md
+rustfmt.toml
