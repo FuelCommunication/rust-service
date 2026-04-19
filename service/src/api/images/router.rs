@@ -52,7 +52,7 @@ pub async fn upload_image(
 
     let (s3_res, kafka_res) = tokio::join!(
         state.s3.upload(&key, data, &content_type),
-        state.kafka.producer.send(&message)
+        state.broker.producer.send(&message)
     );
 
     if let Err(e) = s3_res {
