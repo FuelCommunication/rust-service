@@ -7,23 +7,23 @@ license.workspace = true
 
 [dependencies]
 axum.workspace = true
+axum-prometheus = "0.9.0"
 tokio.workspace = true
 tower-http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-opentelemetry = { version = "0.31.0", features = ["metrics"] }
-opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.31.0", features = ["metrics", "grpc-tonic"] }
 uuid.workspace = true
 dotenvy.workspace = true
 thiserror.workspace = true
+mimalloc.workspace = true
+
+futures-util = "0.3.31"
+
 s3.workspace = true
 kafka.workspace = true
-chrono.workspace = true
-futures-util = "0.3.31"
-http-body-util = "0.1.3"
+scylladb.workspace = true
 
 [dev-dependencies]
-tower = "0.5.2"
+axum-test = "18.4.1"
