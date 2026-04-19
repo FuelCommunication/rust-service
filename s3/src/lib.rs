@@ -4,13 +4,14 @@ use aws_config::Region;
 use aws_sdk_s3::{
     Client,
     config::Credentials,
-    operation::complete_multipart_upload::CompleteMultipartUploadOutput,
+    operation::{
+        complete_multipart_upload::CompleteMultipartUploadOutput, get_object::GetObjectOutput,
+    },
     primitives::ByteStream,
-    types::{CompletedMultipartUpload, CompletedPart},
-    types::{Delete, ObjectIdentifier},
+    types::{CompletedMultipartUpload, CompletedPart, Delete, ObjectIdentifier},
 };
 use error::{S3Error, S3Result};
-use std::{borrow::Cow, ffi::OsStr, fmt::Display, path::Path};
+use std::{borrow::Cow, fmt::Display, path::Path};
 use tokio::{fs::File, io::AsyncReadExt as _};
 
 pub struct S3 {
@@ -78,41 +79,29 @@ impl S3 {
     pub async fn upload(
         &self,
         key: impl Into<String>,
-        file_name: impl AsRef<OsStr>,
+        body: impl Into<ByteStream>,
         content_type: impl Into<String>,
     ) -> S3Result<()> {
-        let path = Path::new(file_name.as_ref());
-        let body = ByteStream::from_path(path).await?;
-
         self.client
             .put_object()
             .bucket(self.bucket)
             .content_type(content_type)
             .key(key)
-            .body(body)
+            .body(body.into())
             .send()
             .await?;
 
         Ok(())
     }
 
-    pub async fn download(
-        &self,
-        key: impl Into<String>,
-        file_name: impl AsRef<Path>,
-    ) -> S3Result<()> {
-        let response = self
+    pub async fn download(&self, key: impl Into<String>) -> S3Result<GetObjectOutput> {
+        Ok(self
             .client
             .get_object()
             .bucket(self.bucket)
             .key(key)
             .send()
-            .await?;
-
-        let mut file = File::create(file_name).await?;
-        let mut stream = response.body.into_async_read();
-        tokio::io::copy(&mut stream, &mut file).await?;
-        Ok(())
+            .await?)
     }
 
     pub async fn delete_object(&self, key: impl Into<String>) -> S3Result<()> {

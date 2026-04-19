@@ -13,3 +13,5 @@ aws-credential-types = { version = "1.2.3", features = ["hardcoded-credentials"]
 tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+axum.workspace = true
+serde_json.workspace = true
