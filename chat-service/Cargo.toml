@@ -13,4 +13,4 @@ tracing-subscriber.workspace = true
 tokio.workspace = true
 s3.workspace = true
 dotenvy.workspace = true
-chrono = "0.4.41"
+uuid.workspace = true
