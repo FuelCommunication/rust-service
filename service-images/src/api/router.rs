@@ -3,18 +3,34 @@ use crate::{
     error::{ApiError, ApiResult, HttpError},
     state::ServerState,
 };
-use axum::extract::{Multipart, Path, State};
+use axum::{
+    extract::{Multipart, Path, State},
+    http::HeaderMap,
+};
 use kafka_client::schemas::{Action, KafkaMessage};
 use uuid::Uuid;
 
 const ALLOWED_CONTENT_TYPES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
 
-#[tracing::instrument(skip(state, multipart))]
+fn extract_user_id(headers: &HeaderMap) -> Result<Uuid, HttpError> {
+    let value = headers
+        .get("X-User-Id")
+        .ok_or_else(|| HttpError::BadRequest("Missing X-User-Id header".into()))?
+        .to_str()
+        .map_err(|_| HttpError::BadRequest("Invalid X-User-Id header".into()))?;
+    value
+        .parse::<Uuid>()
+        .map_err(|_| HttpError::BadRequest("X-User-Id is not a valid UUID".into()))
+}
+
+#[tracing::instrument(skip(state, headers, multipart))]
 pub async fn upload_image(
     State(state): State<ServerState>,
-    Path(user_id): Path<Uuid>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> ApiResult<Image> {
+    let user_id = extract_user_id(&headers)?;
+
     let field = multipart
         .next_field()
         .await
@@ -39,22 +55,18 @@ pub async fn upload_image(
     })?;
 
     let key = Uuid::now_v7().to_string();
+
+    state.s3.upload(&key, data, &content_type).await.map_err(|e| {
+        tracing::error!("Error uploading to S3: {:?}", e);
+        ApiError::Http(HttpError::Internal("Failed to upload file".into()))
+    })?;
+
     let message = KafkaMessage {
         user_id: user_id.to_string(),
         action: Action::Create,
         data: Some(key.clone()),
     };
-
-    let (s3_res, kafka_res) = tokio::join!(
-        state.s3.upload(&key, data, &content_type),
-        state.broker.producer.send(&message.user_id, &message)
-    );
-
-    if let Err(e) = s3_res {
-        tracing::error!("Error uploading to S3: {:?}", e);
-        return Err(ApiError::Http(HttpError::Internal("Failed to upload file".into())));
-    }
-    if let Err(err) = kafka_res {
+    if let Err(err) = state.broker.producer.send(&message.user_id, &message).await {
         tracing::error!("Error sending Kafka message: {:?}", err);
     }
 
@@ -71,8 +83,13 @@ pub async fn download_image(State(state): State<ServerState>, Path(filename): Pa
     })
 }
 
-#[tracing::instrument(skip(state))]
-pub async fn delete_image(State(state): State<ServerState>, Path(filename): Path<String>) -> ApiResult<Image> {
+#[tracing::instrument(skip(state, headers))]
+pub async fn delete_image(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    Path(filename): Path<String>,
+) -> ApiResult<Image> {
+    let user_id = extract_user_id(&headers)?;
     validate_filename(&filename)?;
 
     let exists = state.s3.object_exists(&filename).await?;
@@ -84,11 +101,11 @@ pub async fn delete_image(State(state): State<ServerState>, Path(filename): Path
     state.s3.delete_object(&filename).await?;
 
     let message = KafkaMessage {
-        user_id: String::new(),
+        user_id: user_id.to_string(),
         action: Action::Delete,
         data: Some(filename.clone()),
     };
-    if let Err(err) = state.broker.producer.send(&filename, &message).await {
+    if let Err(err) = state.broker.producer.send(&user_id.to_string(), &message).await {
         tracing::error!("Error sending Kafka delete event: {:?}", err);
     }
 
