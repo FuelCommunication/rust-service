@@ -4054,6 +4054,7 @@ dependencies = [
  "axum",
  "axum-prometheus",
  "axum-test",
+ "dashmap",
  "dotenvy",
  "futures-util",
  "kafka",
