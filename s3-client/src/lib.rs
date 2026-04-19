@@ -73,6 +73,12 @@ impl S3 {
         self.bucket
     }
 
+    pub async fn create_bucket(&self) -> S3Result<()> {
+        self.client.create_bucket().bucket(self.bucket).send().await?;
+        tracing::info!(bucket = %self.bucket, "Created bucket");
+        Ok(())
+    }
+
     pub async fn object_exists(&self, key: impl Into<String>) -> S3Result<bool> {
         let result = self.client.head_object().bucket(self.bucket).key(key).send().await;
 

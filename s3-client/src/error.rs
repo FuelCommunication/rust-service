@@ -2,7 +2,8 @@ use aws_sdk_s3::{
     error::{BuildError, SdkError},
     operation::{
         abort_multipart_upload::AbortMultipartUploadError, complete_multipart_upload::CompleteMultipartUploadError,
-        copy_object::CopyObjectError, create_multipart_upload::CreateMultipartUploadError, delete_bucket::DeleteBucketError,
+        copy_object::CopyObjectError, create_bucket::CreateBucketError,
+        create_multipart_upload::CreateMultipartUploadError, delete_bucket::DeleteBucketError,
         delete_object::DeleteObjectError, delete_objects::DeleteObjectsError, get_object::GetObjectError,
         head_object::HeadObjectError, list_objects_v2::ListObjectsV2Error, put_object::PutObjectError,
         upload_part::UploadPartError,
@@ -37,6 +38,8 @@ pub enum S3Error {
     DeleteObjectError(#[from] SdkError<DeleteObjectError>),
     #[error("Failed to delete multiple objects: {0}")]
     DeleteObjectsError(#[from] SdkError<DeleteObjectsError>),
+    #[error("Failed to create bucket: {0}")]
+    CreateBucketError(#[from] SdkError<CreateBucketError>),
     #[error("Failed to delete bucket: {0}")]
     DeleteBucketError(#[from] SdkError<DeleteBucketError>),
     #[error("Bucket is not empty — objects still remain inside")]

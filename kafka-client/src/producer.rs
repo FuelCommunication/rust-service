@@ -45,7 +45,7 @@ impl KafkaProducer {
 
         delivery_future
             .await
-            .map_err(|cancelled| KafkaError::CanceledMessage(cancelled))?
+            .map_err(KafkaError::CanceledMessage)?
             .map_err(|(err, _)| KafkaError::Kafka(err))?;
 
         tracing::info!(topic = %self.topic, key = %key, "Message sent successfully");
