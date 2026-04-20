@@ -46,7 +46,6 @@ Connect: `GET /ws/{room_id}` with headers `X-User-Id` and `X-Username`
 | Endpoint   | Description           |
 | ---------- | --------------------- |
 | `/ping`    | Liveness check        |
-| `/health`  | ScyllaDB health check |
 | `/metrics` | Prometheus metrics    |
 
 ## Local launch

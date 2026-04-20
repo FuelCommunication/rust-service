@@ -27,7 +27,6 @@ Stack: pingora, pingora-limits, tonic, prost, serde-json, tracing, uuid, chrono 
 | `/auth.*`     | auth service      | gRPC/H2  | no            |
 | `/access/*`   | handled in-gateway| REST→gRPC| no            |
 | `/ping`       | proxied           | HTTP     | no            |
-| `/health`     | proxied           | HTTP     | no            |
 | `/metrics`    | proxied           | HTTP     | no            |
 
 ## Auth API (REST-to-gRPC)
@@ -48,7 +47,7 @@ POST endpoints expect `Content-Type: application/json`.
 
 ## Authentication flow
 
-1. Public routes (`/auth.*`, `/access/*`, `/ping`, `/health`, `/metrics`) pass through without auth
+1. Public routes (`/auth.*`, `/access/*`, `/ping`, `/metrics`) pass through without auth
 2. For protected routes, the gateway extracts the Bearer token from `Authorization` header (or `token` query parameter for WebSocket)
 3. Token is validated via `AuthService.ValidateToken` gRPC call
 4. On success, `X-User-Id`, `X-Username`, `X-Email` headers are injected into the upstream request

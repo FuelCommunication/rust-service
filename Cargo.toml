@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["s3-client", "service-images", "service-chats", "service-calls", "kafka-client", "scylladb-client", "valkey-client", "service-gateway", "service-auth", "service-channels"]
+members = ["s3-client", "service-images", "service-chats", "service-calls", "kafka-client", "scylladb-client", "valkey-client", "service-gateway", "service-auth", "service-channels", "seed-data"]
 
 [workspace.package]
 edition = "2024"

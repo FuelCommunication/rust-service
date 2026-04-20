@@ -6,6 +6,8 @@ pub mod state;
 pub mod store;
 pub mod token;
 
+use axum::{Router, routing};
+use axum_prometheus::PrometheusMetricLayer;
 use config::Config;
 use mimalloc::MiMalloc;
 use oauth::OAuthManager;
@@ -17,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use store::AuthStore;
 use token::TokenManager;
+use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 use tracing_subscriber::EnvFilter;
@@ -68,8 +71,10 @@ impl ServerBuilder {
     }
 
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
-        let addr = format!("0.0.0.0:{}", self.config.grpc_port).parse()?;
+        let grpc_addr = format!("0.0.0.0:{}", self.config.grpc_port).parse()?;
         let svc = AuthServiceImpl::new(Arc::clone(&self.state));
+
+        let (prom_layer, metric_handle) = PrometheusMetricLayer::pair();
 
         let cancel = CancellationToken::new();
         let cleanup_state = Arc::clone(&self.state);
@@ -95,16 +100,39 @@ impl ServerBuilder {
             }
         });
 
-        tracing::info!(%addr, "gRPC auth server starting");
+        let metrics_addr = format!("0.0.0.0:{}", self.config.metrics_port);
+        let metrics_listener = TcpListener::bind(&metrics_addr).await?;
+        let metrics_router = Router::new()
+            .route("/metrics", routing::get(move || {
+                let handle = metric_handle.clone();
+                async move { handle.render() }
+            }))
+            .route("/health", routing::get(|| async { "ok" }))
+            .layer(prom_layer);
+
+        let metrics_cancel = cancel.clone();
+        let metrics_handle = tokio::spawn(async move {
+            tracing::info!(addr = %metrics_addr, "Metrics server starting");
+            if let Err(e) = axum::serve(metrics_listener, metrics_router)
+                .with_graceful_shutdown(async move { metrics_cancel.cancelled().await })
+                .await
+            {
+                tracing::error!(error = %e, "Metrics server error");
+            }
+        });
+
+        tracing::info!(%grpc_addr, "gRPC auth server starting");
 
         let shutdown_cancel = cancel.clone();
         Server::builder()
             .add_service(AuthServiceServer::new(svc))
-            .serve_with_shutdown(addr, async move {
+            .serve_with_shutdown(grpc_addr, async move {
                 shutdown_signal().await;
                 shutdown_cancel.cancel();
             })
             .await?;
+
+        let _ = metrics_handle.await;
 
         self.state.store.pool().close().await;
         tracing::info!("Database pool closed");

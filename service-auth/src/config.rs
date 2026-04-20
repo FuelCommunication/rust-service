@@ -2,6 +2,7 @@ const MIN_JWT_SECRET_LENGTH: usize = 32;
 
 pub struct Config {
     pub grpc_port: u16,
+    pub metrics_port: u16,
     pub database_url: String,
     pub db_max_connections: u32,
     pub db_min_connections: u32,
@@ -28,6 +29,9 @@ impl Config {
             grpc_port: read_env_var("GRPC_PORT")
                 .parse()
                 .expect("GRPC_PORT must be a valid port number"),
+            metrics_port: read_env_var_or("METRICS_PORT", "9090")
+                .parse()
+                .expect("METRICS_PORT must be a valid port number"),
             database_url: read_env_var("DATABASE_URL"),
             db_max_connections: read_env_var_or("DB_MAX_CONNECTIONS", "10")
                 .parse()

@@ -4,11 +4,12 @@ pub mod error;
 pub mod events;
 pub mod state;
 
-use api::{health, not_found, ping, router::websocket_handler, schemas::ServerEvent};
+use api::{not_found, ping, router::websocket_handler, schemas::ServerEvent};
 use axum::{Router, http::StatusCode, routing};
 pub use config::Config;
 use events::ChannelEvent;
 use futures_util::StreamExt;
+use kafka_client::{config::ConsumerConfig, consumer::KafkaConsumer};
 use mimalloc::MiMalloc;
 use state::ServerState;
 use std::time::Duration;
@@ -19,10 +20,6 @@ use tower_http::{
     trace::TraceLayer,
 };
 use uuid::Uuid;
-use kafka_client::{
-    config::ConsumerConfig,
-    consumer::KafkaConsumer
-};
 
 use crate::state::ServerData;
 
@@ -99,7 +96,6 @@ impl ServerBuilder {
     pub fn init_router(state: ServerState) -> Router {
         Router::new()
             .route("/ping", routing::get(ping))
-            .route("/health", routing::get(health))
             .fallback(not_found)
             .route_layer(TimeoutLayer::with_status_code(
                 StatusCode::REQUEST_TIMEOUT,

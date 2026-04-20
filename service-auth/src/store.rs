@@ -25,7 +25,7 @@ impl AuthStore {
         let row = sqlx::query!(
             r#"INSERT INTO users (id, email, username, password_hash)
                VALUES ($1, $2, $3, $4)
-               RETURNING id, email, username, password_hash"#,
+               RETURNING id, email, username, password_hash, avatar_url, bio"#,
             id,
             email,
             username,
@@ -43,6 +43,8 @@ impl AuthStore {
             email: row.email,
             username: row.username,
             password_hash: row.password_hash,
+            avatar_url: row.avatar_url,
+            bio: row.bio,
         })
     }
 
@@ -52,7 +54,7 @@ impl AuthStore {
         let row = sqlx::query!(
             r#"INSERT INTO users (id, email, username)
                VALUES ($1, $2, $3)
-               RETURNING id, email, username, password_hash"#,
+               RETURNING id, email, username, password_hash, avatar_url, bio"#,
             id,
             email,
             username,
@@ -69,12 +71,14 @@ impl AuthStore {
             email: row.email,
             username: row.username,
             password_hash: row.password_hash,
+            avatar_url: row.avatar_url,
+            bio: row.bio,
         })
     }
 
     pub async fn find_user_by_email(&self, email: &str) -> Result<Option<StoredUser>, AuthError> {
         let row = sqlx::query!(
-            r#"SELECT id, email, username, password_hash FROM users WHERE email = $1"#,
+            r#"SELECT id, email, username, password_hash, avatar_url, bio FROM users WHERE email = $1"#,
             email,
         )
         .fetch_optional(&self.pool)
@@ -86,21 +90,72 @@ impl AuthStore {
             email: r.email,
             username: r.username,
             password_hash: r.password_hash,
+            avatar_url: r.avatar_url,
+            bio: r.bio,
         }))
     }
 
     pub async fn find_user_by_id(&self, id: Uuid) -> Result<StoredUser, AuthError> {
-        let row = sqlx::query!(r#"SELECT id, email, username, password_hash FROM users WHERE id = $1"#, id,)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| AuthError::Internal(e.to_string()))?
-            .ok_or(AuthError::UserNotFound)?;
+        let row = sqlx::query!(
+            r#"SELECT id, email, username, password_hash, avatar_url, bio FROM users WHERE id = $1"#,
+            id,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?
+        .ok_or(AuthError::UserNotFound)?;
 
         Ok(StoredUser {
             id: row.id,
             email: row.email,
             username: row.username,
             password_hash: row.password_hash,
+            avatar_url: row.avatar_url,
+            bio: row.bio,
+        })
+    }
+
+    pub async fn update_user(
+        &self,
+        id: Uuid,
+        username: Option<String>,
+        avatar_url: Option<Option<String>>,
+        bio: Option<Option<String>>,
+    ) -> Result<StoredUser, AuthError> {
+        let avatar_set = avatar_url.is_some();
+        let avatar_value = avatar_url.flatten();
+        let bio_set = bio.is_some();
+        let bio_value = bio.flatten();
+
+        let row = sqlx::query!(
+            r#"UPDATE users SET
+                 username   = COALESCE($2, username),
+                 avatar_url = CASE WHEN $3::bool THEN $4 ELSE avatar_url END,
+                 bio        = CASE WHEN $5::bool THEN $6 ELSE bio END
+               WHERE id = $1
+               RETURNING id, email, username, password_hash, avatar_url, bio"#,
+            id,
+            username.as_deref(),
+            avatar_set,
+            avatar_value.as_deref(),
+            bio_set,
+            bio_value.as_deref(),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::Database(ref db_err) if db_err.is_unique_violation() => AuthError::UserAlreadyExists,
+            _ => AuthError::Internal(e.to_string()),
+        })?
+        .ok_or(AuthError::UserNotFound)?;
+
+        Ok(StoredUser {
+            id: row.id,
+            email: row.email,
+            username: row.username,
+            password_hash: row.password_hash,
+            avatar_url: row.avatar_url,
+            bio: row.bio,
         })
     }
 
@@ -238,6 +293,8 @@ pub struct StoredUser {
     pub email: String,
     pub username: String,
     pub password_hash: Option<String>,
+    pub avatar_url: Option<String>,
+    pub bio: Option<String>,
 }
 
 #[derive(Clone, Debug)]

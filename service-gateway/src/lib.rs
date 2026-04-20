@@ -100,8 +100,14 @@ impl Gateway {
     }
 }
 
-fn is_public_route(path: &str) -> bool {
-    path.starts_with("/auth.") || path.starts_with("/access/") || path == "/ping" || path == "/health" || path == "/metrics"
+fn is_public_route(method: &str, path: &str) -> bool {
+    if path.starts_with("/auth.") || path.starts_with("/access/") || path == "/ping" || path == "/metrics" {
+        return true;
+    }
+    if method == "GET" && path.starts_with("/images/") {
+        return true;
+    }
+    false
 }
 
 fn extract_token(session: &Session, path: &str) -> Option<String> {
@@ -112,7 +118,7 @@ fn extract_token(session: &Session, path: &str) -> Option<String> {
         return Some(token.to_string());
     }
 
-    if path.starts_with("/ws")
+    if (path.starts_with("/ws") || path.starts_with("/rooms/ws"))
         && let Some(query) = session.req_header().uri.query()
     {
         for param in query.split('&') {
@@ -278,7 +284,7 @@ impl ProxyHttp for Gateway {
             return auth_handler::handle_auth_route(session, &path, &method, self.get_auth_client().await, &auth_ctx).await;
         }
 
-        if !is_public_route(path) {
+        if !is_public_route(method, path) {
             let Some(token) = extract_token(session, path) else {
                 return respond_unauthorized(session, ctx.origin.as_deref(), &self.config.allowed_origins, &ctx.request_id).await;
             };

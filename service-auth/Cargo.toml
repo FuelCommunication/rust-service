@@ -27,6 +27,8 @@ uuid.workspace = true
 chrono.workspace = true
 mimalloc.workspace = true
 serde.workspace = true
+axum.workspace = true
+axum-prometheus.workspace = true
 
 [build-dependencies]
 tonic-prost-build.workspace = true

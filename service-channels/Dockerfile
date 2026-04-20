@@ -5,12 +5,18 @@ RUN apt-get update && \
     cmake \
     pkg-config \
     build-essential \
+    clang \
+    libclang-dev \
+    libcurl4-openssl-dev \
     && rustup target add x86_64-unknown-linux-musl \
-    && ln -s /usr/bin/g++ /usr/bin/x86_64-linux-musl-g++
+    && ln -s /usr/bin/g++ /usr/bin/musl-g++ \
+    && ln -s /usr/include/x86_64-linux-gnu/curl /usr/include/x86_64-linux-musl/curl
 WORKDIR /usr/src/app
 COPY Cargo.toml Cargo.lock ./
 COPY . ./
 ENV SQLX_OFFLINE=true
+ENV CC_x86_64_unknown_linux_musl="musl-gcc"
+ENV CXX_x86_64_unknown_linux_musl="musl-g++"
 RUN cargo build -p service-channels --target x86_64-unknown-linux-musl --release
 
 FROM scratch

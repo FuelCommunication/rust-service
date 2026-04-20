@@ -7,9 +7,9 @@ use uuid::Uuid;
 
 use crate::error::AuthError;
 use crate::proto::{
-    AuthTokens, LoginRequest, LoginResponse, LogoutRequest, OAuthAuthenticateRequest, OAuthGetAuthUrlRequest,
-    OAuthGetAuthUrlResponse, OAuthProvider, RefreshTokenRequest, RegisterRequest, RegisterResponse, ValidateTokenRequest,
-    ValidateTokenResponse, auth_service_server::AuthService,
+    AuthTokens, GetMeRequest, LoginRequest, LoginResponse, LogoutRequest, OAuthAuthenticateRequest, OAuthGetAuthUrlRequest,
+    OAuthGetAuthUrlResponse, OAuthProvider, RefreshTokenRequest, RegisterRequest, RegisterResponse, UpdateUserRequest,
+    UserProfile, ValidateTokenRequest, ValidateTokenResponse, auth_service_server::AuthService,
 };
 use crate::state::ServerState;
 
@@ -71,6 +71,18 @@ impl AuthServiceImpl {
             }
         })
         .await;
+    }
+
+    async fn user_from_access_token(&self, access_token: &str) -> Result<crate::store::StoredUser, AuthError> {
+        if access_token.is_empty() {
+            return Err(AuthError::InvalidArgument("access_token is required".into()));
+        }
+        let claims = self.state.tokens.validate_access_token(access_token)?;
+        let user_id: Uuid = claims
+            .sub
+            .parse()
+            .map_err(|_| AuthError::InvalidToken("invalid sub".into()))?;
+        self.state.store.find_user_by_id(user_id).await
     }
 
     async fn issue_tokens(&self, user_id: Uuid, email: &str, username: &str) -> Result<AuthTokens, AuthError> {
@@ -379,6 +391,56 @@ impl AuthService for AuthServiceImpl {
         tracing::info!(user_id = %user.id, provider = provider_str, "OAuth login successful");
 
         Ok(Response::new(tokens))
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn get_me(&self, req: Request<GetMeRequest>) -> Result<Response<UserProfile>, Status> {
+        let req = req.into_inner();
+        let user = self.user_from_access_token(&req.access_token).await.map_err(Status::from)?;
+        Ok(Response::new(user_to_profile(user)))
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn update_user(&self, req: Request<UpdateUserRequest>) -> Result<Response<UserProfile>, Status> {
+        let req = req.into_inner();
+        let user = self.user_from_access_token(&req.access_token).await.map_err(Status::from)?;
+
+        let username = match req.username {
+            Some(u) => {
+                let trimmed = u.trim();
+                if trimmed.is_empty() || trimmed.len() > MAX_USERNAME_LENGTH {
+                    return Err(AuthError::InvalidArgument(format!(
+                        "username must be between 1 and {MAX_USERNAME_LENGTH} characters"
+                    ))
+                    .into());
+                }
+                Some(trimmed.to_string())
+            }
+            None => None,
+        };
+
+        let avatar_url = req.avatar_url.map(|s| if s.is_empty() { None } else { Some(s) });
+        let bio = req.bio.map(|s| if s.is_empty() { None } else { Some(s) });
+
+        let updated = self
+            .state
+            .store
+            .update_user(user.id, username, avatar_url, bio)
+            .await
+            .map_err(Status::from)?;
+
+        tracing::info!(user_id = %updated.id, "User updated");
+        Ok(Response::new(user_to_profile(updated)))
+    }
+}
+
+fn user_to_profile(user: crate::store::StoredUser) -> UserProfile {
+    UserProfile {
+        id: user.id.to_string(),
+        email: user.email,
+        username: user.username,
+        avatar_url: user.avatar_url,
+        bio: user.bio,
     }
 }
 

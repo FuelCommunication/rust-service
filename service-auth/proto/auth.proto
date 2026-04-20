@@ -13,6 +13,27 @@ service AuthService {
   rpc Logout(LogoutRequest) returns (google.protobuf.Empty);
   rpc OAuthGetAuthUrl(OAuthGetAuthUrlRequest) returns (OAuthGetAuthUrlResponse);
   rpc OAuthAuthenticate(OAuthAuthenticateRequest) returns (AuthTokens);
+  rpc GetMe(GetMeRequest) returns (UserProfile);
+  rpc UpdateUser(UpdateUserRequest) returns (UserProfile);
+}
+
+message UserProfile {
+  string id = 1;
+  string email = 2;
+  string username = 3;
+  optional string avatar_url = 4;
+  optional string bio = 5;
+}
+
+message GetMeRequest {
+  string access_token = 1;
+}
+
+message UpdateUserRequest {
+  string access_token = 1;
+  optional string username = 2;
+  optional string bio = 3;
+  optional string avatar_url = 4;
 }
 
 enum OAuthProvider {

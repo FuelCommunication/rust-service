@@ -90,6 +90,13 @@ struct LogoutBody {
     refresh_token: String,
 }
 
+#[derive(Deserialize)]
+struct UpdateUserBody {
+    username: Option<String>,
+    bio: Option<String>,
+    avatar_url: Option<String>,
+}
+
 #[derive(Serialize)]
 struct UserDto {
     id: String,
@@ -306,6 +313,7 @@ pub async fn handle_auth_route(
                 .await
             }
             "/access/oauth/callback" => handle_oauth_callback(session, auth_client, ctx.config, ctx.request_id).await,
+            "/access/users/me" => handle_get_me(session, auth_client, ctx).await,
             _ => {
                 respond_error(
                     session,
@@ -317,6 +325,13 @@ pub async fn handle_auth_route(
                 )
                 .await
             }
+        };
+    }
+
+    if method == "PATCH" {
+        return match path {
+            "/access/users/me" => handle_update_user(session, auth_client, ctx).await,
+            _ => respond_error(session, 404, "Not found", ctx.origin, ctx.allowed_origins, ctx.request_id).await,
         };
     }
 
@@ -356,6 +371,133 @@ pub async fn handle_auth_route(
         "/access/refresh" => handle_refresh(session, auth_client, ctx).await,
         "/access/logout" => handle_logout(session, auth_client, ctx).await,
         _ => respond_error(session, 404, "Not found", ctx.origin, ctx.allowed_origins, ctx.request_id).await,
+    }
+}
+
+fn extract_bearer(session: &Session) -> Option<String> {
+    session
+        .req_header()
+        .headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.to_string())
+}
+
+fn profile_to_dto(p: proto::UserProfile) -> UserDto {
+    UserDto {
+        id: p.id,
+        email: p.email,
+        username: p.username,
+        avatar_url: p.avatar_url,
+        bio: p.bio,
+    }
+}
+
+async fn handle_get_me(
+    session: &mut Session,
+    auth_client: &AuthServiceClient<Channel>,
+    ctx: &AuthContext<'_>,
+) -> PingoraResult<bool> {
+    let Some(token) = extract_bearer(session) else {
+        return respond_error(session, 401, "Unauthorized", ctx.origin, ctx.allowed_origins, ctx.request_id).await;
+    };
+
+    let mut client = auth_client.clone();
+    let mut req = tonic::Request::new(proto::GetMeRequest { access_token: token });
+    req.set_timeout(GRPC_TIMEOUT);
+
+    match client.get_me(req).await {
+        Ok(resp) => {
+            let dto = profile_to_dto(resp.into_inner());
+            respond_json(session, 200, &dto, ctx.origin, ctx.allowed_origins, ctx.request_id).await
+        }
+        Err(status) => {
+            respond_error(
+                session,
+                grpc_status_to_http(status.code()),
+                status.message(),
+                ctx.origin,
+                ctx.allowed_origins,
+                ctx.request_id,
+            )
+            .await
+        }
+    }
+}
+
+async fn handle_update_user(
+    session: &mut Session,
+    auth_client: &AuthServiceClient<Channel>,
+    ctx: &AuthContext<'_>,
+) -> PingoraResult<bool> {
+    let Some(token) = extract_bearer(session) else {
+        return respond_error(session, 401, "Unauthorized", ctx.origin, ctx.allowed_origins, ctx.request_id).await;
+    };
+
+    let content_type = session
+        .req_header()
+        .headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !content_type.to_ascii_lowercase().starts_with("application/json") {
+        return respond_error(
+            session,
+            415,
+            "Content-Type must be application/json",
+            ctx.origin,
+            ctx.allowed_origins,
+            ctx.request_id,
+        )
+        .await;
+    }
+
+    let body = match read_full_body(session, ctx.max_body_size).await {
+        Ok(b) => b,
+        Err(e) => return respond_error(session, 400, &e, ctx.origin, ctx.allowed_origins, ctx.request_id).await,
+    };
+
+    let parsed: UpdateUserBody = match serde_json::from_slice(&body) {
+        Ok(b) => b,
+        Err(e) => {
+            return respond_error(
+                session,
+                400,
+                &format!("Invalid JSON: {e}"),
+                ctx.origin,
+                ctx.allowed_origins,
+                ctx.request_id,
+            )
+            .await;
+        }
+    };
+
+    let mut client = auth_client.clone();
+    let mut req = tonic::Request::new(proto::UpdateUserRequest {
+        access_token: token,
+        username: parsed.username,
+        bio: parsed.bio,
+        avatar_url: parsed.avatar_url,
+    });
+    req.set_timeout(GRPC_TIMEOUT);
+
+    match client.update_user(req).await {
+        Ok(resp) => {
+            let dto = profile_to_dto(resp.into_inner());
+            respond_json(session, 200, &dto, ctx.origin, ctx.allowed_origins, ctx.request_id).await
+        }
+        Err(status) => {
+            respond_error(
+                session,
+                grpc_status_to_http(status.code()),
+                status.message(),
+                ctx.origin,
+                ctx.allowed_origins,
+                ctx.request_id,
+            )
+            .await
+        }
     }
 }
 
