@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO users (id, email, username)\n               VALUES ($1, $2, $3)\n               RETURNING id, email, username, password_hash",
+  "query": "INSERT INTO users (id, email, username)\n               VALUES ($1, $2, $3)\n               RETURNING id, email, username, password_hash, avatar_url, bio",
   "describe": {
     "columns": [
       {
@@ -22,6 +22,16 @@
         "ordinal": 3,
         "name": "password_hash",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "avatar_url",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "bio",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -35,8 +45,10 @@
       false,
       false,
       false,
+      true,
+      true,
       true
     ]
   },
-  "hash": "1fcb0ce06e3f0890155c5830f679d357ea563693d56f7e0774ab061660d2da87"
+  "hash": "964a7e6d1873493277f42c5faf6aedf74ea8f7f5983dafb58cc6a00d3c9be193"
 }
