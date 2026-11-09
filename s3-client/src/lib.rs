@@ -88,7 +88,7 @@ impl S3 {
                 if e.as_service_error().and_then(ProvideErrorMetadata::code) == Some("NotFound") {
                     Ok(false)
                 } else {
-                    Err(S3Error::HeaderObjectError(e))
+                    Err(S3Error::HeaderObjectError(Box::new(e)))
                 }
             }
         }
@@ -188,7 +188,7 @@ impl S3 {
                 }
                 Err(err) => {
                     tracing::error!(error = ?err, "Failed to list objects");
-                    return Err(S3Error::ListObjectError(err));
+                    return Err(S3Error::ListObjectError(Box::new(err)));
                 }
             }
         }
@@ -248,7 +248,7 @@ impl S3 {
                 if err.as_service_error().and_then(ProvideErrorMetadata::code) == Some("NoSuchBucket") {
                     Ok(())
                 } else {
-                    Err(S3Error::DeleteBucketError(err))
+                    Err(S3Error::DeleteBucketError(Box::new(err)))
                 }
             }
         }

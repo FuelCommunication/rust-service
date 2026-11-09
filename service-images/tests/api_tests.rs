@@ -18,7 +18,6 @@ const ACCESS_KEY: &str = "minioadmin";
 const SECRET_KEY: &str = "minioadmin";
 const REGION: &str = "us-east-1";
 const BUCKET: &str = "test-images";
-const KAFKA_TOPIC: &str = "images-test";
 
 struct TestContext {
     server: TestServer,
@@ -35,9 +34,6 @@ async fn setup() -> anyhow::Result<TestContext> {
     let bucket: &'static str = Box::leak(BUCKET.to_string().into_boxed_str());
     let s3 = S3::new(ACCESS_KEY, SECRET_KEY, REGION, &endpoint, bucket).await;
     s3.create_bucket().await?;
-    let kafka_host = kafka.get_host().await?;
-    let kafka_port = kafka.get_host_port_ipv4(9093).await?;
-    let brokers = format!("{}:{}", kafka_host, kafka_port);
 
     let state: ServerState = Arc::new(ServerData { s3 });
 

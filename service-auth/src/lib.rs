@@ -103,10 +103,13 @@ impl ServerBuilder {
         let metrics_addr = format!("0.0.0.0:{}", self.config.metrics_port);
         let metrics_listener = TcpListener::bind(&metrics_addr).await?;
         let metrics_router = Router::new()
-            .route("/metrics", routing::get(move || {
-                let handle = metric_handle.clone();
-                async move { handle.render() }
-            }))
+            .route(
+                "/metrics",
+                routing::get(move || {
+                    let handle = metric_handle.clone();
+                    async move { handle.render() }
+                }),
+            )
             .route("/health", routing::get(|| async { "ok" }))
             .layer(prom_layer);
 

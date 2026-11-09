@@ -3,7 +3,7 @@ use service_images::{ServerBuilder, config::Config};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use axum::http::{Method, header};
-    dotenvy::dotenv()?;
+    dotenvy::dotenv().ok();
 
     let config = Config::from_env();
     ServerBuilder::new(config)
