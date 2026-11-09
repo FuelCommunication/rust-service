@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["s3-client", "service-images", "service-chats", "service-calls", "kafka-client", "scylladb-client", "valkey-client", "service-gateway", "service-auth", "service-channels", "seed-data"]
+members = ["s3-client", "service-images", "service-chats", "service-calls", "kafka-client", "scylladb-client", "valkey-client", "service-gateway", "service-auth", "service-channels"]
 
 [workspace.package]
 edition = "2024"
@@ -11,10 +11,10 @@ license = "MIT"
 # HTTP stack
 axum = { version = "0.8", features = ["multipart", "macros", "ws"] }
 axum-prometheus = "0.10"
-tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
+tower-http = { version = "0.7", features = ["cors", "trace", "timeout"] }
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono"] }
 
 # gRPC stack
 tonic = "0.14"
@@ -24,7 +24,7 @@ prost = "0.14"
 prost-types = "0.14"
 
 # Async runtime
-tokio = { version = "1.51", features = ["rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "signal"] }
 
 # HTTP client
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls"] }
@@ -57,7 +57,7 @@ scylladb-client = { path = "scylladb-client" }
 valkey-client = { path = "valkey-client" }
 
 # Tests
-axum-test = "20"
+axum-test = "21"
 testcontainers-modules = { version = "0.15.0", features = ["kafka", "minio", "valkey"] }
 anyhow = "1"
 tempfile = "3"

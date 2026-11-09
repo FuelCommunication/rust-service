@@ -7,9 +7,9 @@ license.workspace = true
 build = "build.rs"
 
 [dependencies]
-pingora = { version = "0.8", features = ["proxy"] }
-pingora-limits = "0.8"
-bytes = "1.11"
+pingora = { version = "0.9", features = ["proxy"] }
+pingora-limits = "0.9"
+bytes = "1.12"
 async-trait = "0.1"
 
 tracing.workspace = true
