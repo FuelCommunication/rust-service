@@ -5,11 +5,18 @@ edition.workspace = true
 readme.workspace = true
 license.workspace = true
 
+[features]
+default = []
+credentials-chain = ["dep:aws-config"]
+
 [dependencies]
-aws-sdk-s3 = "1"
-aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "http-1x"] }
+aws-config = { version = "1", optional = true, default-features = false, features = ["rt-tokio", "default-https-client"] }
 aws-credential-types = { version = "1.3.1", features = ["hardcoded-credentials"] }
-tokio.workspace = true
+bytes = "1"
+percent-encoding = "2"
+futures-util.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "rt", "time"] }
 tracing.workspace = true
 thiserror.workspace = true
 

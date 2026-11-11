@@ -1,459 +1,569 @@
+pub mod config;
 pub mod error;
+mod transfer;
 
-use aws_config::{Region, retry::RetryConfig, timeout::TimeoutConfig};
+pub use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::{
     Client,
-    config::Credentials,
-    error::ProvideErrorMetadata,
-    operation::complete_multipart_upload::CompleteMultipartUploadOutput,
-    primitives::ByteStream,
-    types::{CompletedMultipartUpload, CompletedPart, Delete, ObjectIdentifier},
+    config::{
+        BehaviorVersion, Credentials, Region, RequestChecksumCalculation, ResponseChecksumValidation, retry::RetryConfig,
+        timeout::TimeoutConfig,
+    },
+    presigning::PresigningConfig,
+    primitives::DateTime,
+    types::{BucketLocationConstraint, CreateBucketConfiguration, Delete, Object, ObjectIdentifier},
 };
-use error::{S3Error, S3Result};
-use std::{borrow::Cow, path::Path, time::Duration};
-use tokio::{fs::File, io::AsyncReadExt as _};
+use bytes::Bytes;
+pub use config::{AddressingStyle, ChecksumMode, S3Config, S3Credentials, TransferConfig};
+use error::{DeleteFailure, S3Error, S3Result, SdkResultExt as _};
+use futures_util::{Stream, StreamExt as _, TryStreamExt as _};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
-const DEFAULT_CHUNK_SIZE: usize = 5 * 1024 * 1024; // 5MB
+const DELETE_BATCH_SIZE: usize = 1000;
 
-pub struct S3Object {
-    pub data: Vec<u8>,
-    pub content_type: Option<String>,
+fn is_retryable_delete_error(code: Option<&str>) -> bool {
+    matches!(
+        code,
+        Some("SlowDown" | "ServiceUnavailable" | "InternalError" | "RequestTimeout" | "Throttling" | "ThrottlingException")
+    )
 }
 
+fn delete_backoff(attempt: u32) -> Duration {
+    Duration::from_millis(100u64.saturating_mul(1 << attempt.min(6))).min(Duration::from_secs(5))
+}
+
+const COPY_SOURCE_ESCAPE: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~')
+    .remove(b'/');
+
+fn to_system_time(dt: Option<&DateTime>) -> Option<SystemTime> {
+    dt.and_then(|d| SystemTime::try_from(*d).ok())
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ObjectMeta {
+    pub size: Option<u64>,
+    pub content_type: Option<String>,
+    pub e_tag: Option<String>,
+    pub last_modified: Option<SystemTime>,
+    pub cache_control: Option<String>,
+    pub content_disposition: Option<String>,
+    pub metadata: HashMap<String, String>,
+}
+
+macro_rules! object_meta_from {
+    ($($output:ty),+) => {
+        $(
+            impl From<&$output> for ObjectMeta {
+                fn from(o: &$output) -> Self {
+                    Self {
+                        size: o.content_length().and_then(|l| u64::try_from(l).ok()),
+                        content_type: o.content_type().map(str::to_owned),
+                        e_tag: o.e_tag().map(str::to_owned),
+                        last_modified: to_system_time(o.last_modified()),
+                        cache_control: o.cache_control().map(str::to_owned),
+                        content_disposition: o.content_disposition().map(str::to_owned),
+                        metadata: o.metadata().cloned().unwrap_or_default(),
+                    }
+                }
+            }
+        )+
+    };
+}
+
+object_meta_from!(
+    aws_sdk_s3::operation::head_object::HeadObjectOutput,
+    aws_sdk_s3::operation::get_object::GetObjectOutput
+);
+
+#[derive(Debug, Clone)]
+pub struct S3Object {
+    pub data: Bytes,
+    pub meta: ObjectMeta,
+}
+
+#[derive(Debug)]
+pub struct S3ObjectStream {
+    pub body: ByteStream,
+    pub meta: ObjectMeta,
+}
+
+#[derive(Debug, Clone)]
+pub struct ObjectInfo {
+    pub key: String,
+    pub size: Option<u64>,
+    pub e_tag: Option<String>,
+    pub last_modified: Option<SystemTime>,
+}
+
+impl ObjectInfo {
+    fn from_sdk(o: &Object) -> Option<Self> {
+        Some(Self {
+            key: o.key()?.to_owned(),
+            size: o.size().and_then(|s| u64::try_from(s).ok()),
+            e_tag: o.e_tag().map(str::to_owned),
+            last_modified: to_system_time(o.last_modified()),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PutOptions {
+    pub content_type: Option<String>,
+    pub cache_control: Option<String>,
+    pub content_disposition: Option<String>,
+    pub metadata: HashMap<String, String>,
+}
+
+impl PutOptions {
+    pub fn content_type(content_type: impl Into<String>) -> Self {
+        Self {
+            content_type: Some(content_type.into()),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PresignedUrl {
+    pub url: String,
+    pub method: String,
+    pub headers: Vec<(String, String)>,
+}
+
+impl From<aws_sdk_s3::presigning::PresignedRequest> for PresignedUrl {
+    fn from(req: aws_sdk_s3::presigning::PresignedRequest) -> Self {
+        Self {
+            url: req.uri().to_owned(),
+            method: req.method().to_owned(),
+            headers: req.headers().map(|(k, v)| (k.to_owned(), v.to_owned())).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct S3 {
     client: Client,
-    bucket: &'static str,
+    bucket: Arc<str>,
+    transfer: TransferConfig,
 }
 
 impl S3 {
-    pub async fn new(
-        access_key: impl Into<String>,
-        secret_key: impl Into<String>,
-        region: impl Into<Cow<'static, str>>,
-        endpoint_url: impl Into<String>,
-        bucket: impl Into<&'static str>,
-    ) -> Self {
-        let region = region.into();
-        let endpoint_url = endpoint_url.into();
-        let bucket = bucket.into();
+    pub async fn new(config: S3Config) -> S3Result<Self> {
+        config.validate()?;
+
+        let region = Region::new(config.region.clone());
+        let path_style = config.force_path_style();
+        let mut timeouts = TimeoutConfig::builder().connect_timeout(config.connect_timeout);
+        if let Some(t) = config.read_timeout {
+            timeouts = timeouts.read_timeout(t);
+        }
+        if let Some(t) = config.operation_attempt_timeout {
+            timeouts = timeouts.operation_attempt_timeout(t);
+        }
+        if let Some(t) = config.operation_timeout {
+            timeouts = timeouts.operation_timeout(t);
+        }
+
+        let (request_checksum, response_checksum) = match config.checksum {
+            ChecksumMode::WhenRequired => (
+                RequestChecksumCalculation::WhenRequired,
+                ResponseChecksumValidation::WhenRequired,
+            ),
+            ChecksumMode::WhenSupported => (
+                RequestChecksumCalculation::WhenSupported,
+                ResponseChecksumValidation::WhenSupported,
+            ),
+        };
+
+        let mut builder = aws_sdk_s3::config::Builder::new()
+            .behavior_version(BehaviorVersion::latest())
+            .region(region.clone())
+            .retry_config(RetryConfig::standard().with_max_attempts(config.max_attempts))
+            .timeout_config(timeouts.build())
+            .force_path_style(path_style)
+            .request_checksum_calculation(request_checksum)
+            .response_checksum_validation(response_checksum);
+
+        if let Some(endpoint) = &config.endpoint_url {
+            builder = builder.endpoint_url(endpoint);
+        }
+
+        builder = match config.credentials {
+            Some(S3Credentials::Static {
+                access_key,
+                secret_key,
+                session_token,
+            }) => builder.credentials_provider(Credentials::new(access_key, secret_key, session_token, None, "s3-client")),
+            #[cfg(feature = "credentials-chain")]
+            Some(S3Credentials::DefaultChain) | None => builder.credentials_provider(
+                aws_config::default_provider::credentials::DefaultCredentialsChain::builder()
+                    .region(region)
+                    .build()
+                    .await,
+            ),
+            #[cfg(not(feature = "credentials-chain"))]
+            None => {
+                return Err(S3Error::InvalidConfig(
+                    "credentials are not set (enable the `credentials-chain` feature to load them from the environment)".into(),
+                ));
+            }
+        };
 
         tracing::info!(
-            endpoint = %endpoint_url,
-            region = %region,
-            bucket = %bucket,
-            "Initializing S3 client"
+            bucket = %config.bucket,
+            region = %config.region,
+            endpoint = ?config.endpoint_url,
+            path_style,
+            "S3 client initialized"
         );
 
-        let creds = Credentials::new(access_key, secret_key, None, None, "loaded-from-custom-env");
-        let retry_config = RetryConfig::standard().with_max_attempts(5);
-        let timeout_config = TimeoutConfig::builder()
-            .connect_timeout(Duration::from_secs(5))
-            .read_timeout(Duration::from_secs(30))
-            .operation_attempt_timeout(Duration::from_secs(60))
-            .build();
+        Ok(Self {
+            client: Client::from_conf(builder.build()),
+            bucket: config.bucket.into(),
+            transfer: config.transfer,
+        })
+    }
 
-        let cfg = aws_sdk_s3::config::Builder::new()
-            .endpoint_url(endpoint_url)
-            .credentials_provider(creds)
-            .region(Region::new(region))
-            .retry_config(retry_config)
-            .timeout_config(timeout_config)
-            .force_path_style(true)
-            .behavior_version_latest()
-            .build();
+    pub fn from_client(client: Client, bucket: impl Into<Arc<str>>, transfer: TransferConfig) -> S3Result<Self> {
+        transfer.validate()?;
+        Ok(Self {
+            client,
+            bucket: bucket.into(),
+            transfer,
+        })
+    }
 
-        let client = Client::from_conf(cfg);
-
-        tracing::info!(bucket = %bucket, "S3 client initialized");
-
-        Self { client, bucket }
+    pub fn client(&self) -> &Client {
+        &self.client
     }
 
     pub fn bucket(&self) -> &str {
-        self.bucket
+        &self.bucket
     }
 
     pub async fn create_bucket(&self) -> S3Result<()> {
-        self.client.create_bucket().bucket(self.bucket).send().await?;
-        tracing::info!(bucket = %self.bucket, "Created bucket");
-        Ok(())
-    }
+        let mut req = self.client.create_bucket().bucket(&*self.bucket);
 
-    pub async fn object_exists(&self, key: impl Into<String>) -> S3Result<bool> {
-        let result = self.client.head_object().bucket(self.bucket).key(key).send().await;
+        if let Some(region) = self.client.config().region()
+            && region.as_ref() != "us-east-1"
+        {
+            req = req.create_bucket_configuration(
+                CreateBucketConfiguration::builder()
+                    .location_constraint(BucketLocationConstraint::from(region.as_ref()))
+                    .build(),
+            );
+        }
 
-        match result {
-            Ok(_) => Ok(true),
-            Err(e) => {
-                if e.as_service_error().and_then(ProvideErrorMetadata::code) == Some("NotFound") {
-                    Ok(false)
-                } else {
-                    Err(S3Error::HeaderObjectError(Box::new(e)))
-                }
+        match req.send().await.op("CreateBucket") {
+            Ok(_) => {
+                tracing::info!(bucket = %self.bucket, "Created bucket");
+                Ok(())
             }
+            Err(e) if matches!(e.code(), Some("BucketAlreadyOwnedByYou")) => Ok(()),
+            Err(e) => Err(e),
         }
     }
 
-    pub async fn copy_object(
-        &self,
-        destination_bucket: impl Into<String>,
-        source_object: impl Into<String>,
-        destination_object: impl Into<String>,
-    ) -> S3Result<String> {
-        let destination_bucket = destination_bucket.into();
-        let source_object = source_object.into();
-        let destination_object = destination_object.into();
-        let source_key = format!("{}/{}", self.bucket, source_object);
-
-        let response = self
+    pub async fn delete_bucket(&self) -> S3Result<()> {
+        match self
             .client
-            .copy_object()
-            .copy_source(&source_key)
-            .bucket(&destination_bucket)
-            .key(&destination_object)
+            .delete_bucket()
+            .bucket(&*self.bucket)
             .send()
-            .await?;
-
-        let e_tag = response.copy_object_result().and_then(|r| r.e_tag()).unwrap_or("missing");
-
-        tracing::info!(
-            source = %source_key,
-            destination = %format!("{}/{}", destination_bucket, destination_object),
-            e_tag = %e_tag,
-            "Successfully copied object"
-        );
-
-        Ok(e_tag.to_string())
-    }
-
-    pub async fn upload(
-        &self,
-        key: impl Into<String>,
-        body: impl Into<ByteStream>,
-        content_type: impl Into<String>,
-    ) -> S3Result<()> {
-        let key = key.into();
-        let content_type = content_type.into();
-        let data = body.into().collect().await.map_err(S3Error::from)?.into_bytes();
-        let size = data.len();
-
-        self.client
-            .put_object()
-            .bucket(self.bucket)
-            .content_type(&content_type)
-            .content_length(size as i64)
-            .key(&key)
-            .body(ByteStream::from(data))
-            .send()
-            .await?;
-
-        tracing::info!("Uploaded file: key={key}, size={size} bytes, content_type={content_type}");
-        Ok(())
-    }
-
-    pub async fn download(&self, key: impl Into<String>) -> S3Result<S3Object> {
-        let key = key.into();
-        let object = self.client.get_object().bucket(self.bucket).key(&key).send().await?;
-        let content_type = object.content_type().map(String::from);
-        let data = object.body.collect().await.map_err(S3Error::from)?.to_vec();
-        tracing::info!("File downloaded: {}, size: {} bytes", key, data.len());
-        Ok(S3Object { data, content_type })
-    }
-
-    pub async fn delete_object(&self, key: impl Into<String>) -> S3Result<()> {
-        let key = key.into();
-        self.client.delete_object().bucket(self.bucket).key(&key).send().await?;
-        tracing::info!("File deleted with key: {key}");
-        Ok(())
-    }
-
-    pub async fn list_objects(&self, max_keys: Option<i32>) -> S3Result<Vec<String>> {
-        let mut list_objects = Vec::with_capacity(max_keys.unwrap_or(10) as usize);
-        let max_keys = max_keys.unwrap_or(1000);
-
-        let mut response = self
-            .client
-            .list_objects_v2()
-            .bucket(self.bucket)
-            .max_keys(max_keys)
-            .into_paginator()
-            .send();
-
-        while let Some(result) = response.next().await {
-            match result {
-                Ok(output) => {
-                    for object in output.contents() {
-                        list_objects.push(object.key().unwrap_or("Unknown").to_owned());
-                    }
-                }
-                Err(err) => {
-                    tracing::error!(error = ?err, "Failed to list objects");
-                    return Err(S3Error::ListObjectError(Box::new(err)));
-                }
-            }
-        }
-
-        Ok(list_objects)
-    }
-
-    pub async fn delete_objects(&self, keys: Vec<String>) -> S3Result<usize> {
-        if keys.is_empty() {
-            return Ok(0);
-        }
-
-        let mut delete_object_ids = Vec::new();
-        for key in &keys {
-            let obj_id = ObjectIdentifier::builder().key(key).build()?;
-            delete_object_ids.push(obj_id);
-        }
-
-        let delete = Delete::builder().set_objects(Some(delete_object_ids)).build()?;
-
-        self.client.delete_objects().bucket(self.bucket).delete(delete).send().await?;
-
-        Ok(keys.len())
-    }
-
-    pub async fn clear_bucket(&self) -> S3Result<Vec<String>> {
-        let objects = self.list_objects(None).await?;
-
-        if objects.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let deleted_count = self.delete_objects(objects.clone()).await?;
-        tracing::info!(
-            bucket = %self.bucket,
-            deleted = deleted_count,
-            "Cleared bucket"
-        );
-
-        let remaining = self.list_objects(Some(1)).await?;
-        if !remaining.is_empty() {
-            return Err(S3Error::BucketNotEmpty);
-        }
-
-        Ok(objects)
-    }
-
-    pub async fn delete_bucket(self) -> S3Result<()> {
-        let resp = self.client.delete_bucket().bucket(self.bucket).send().await;
-
-        match resp {
+            .await
+            .op("DeleteBucket")
+        {
             Ok(_) => {
                 tracing::info!(bucket = %self.bucket, "Deleted bucket");
                 Ok(())
             }
-            Err(err) => {
-                if err.as_service_error().and_then(ProvideErrorMetadata::code) == Some("NoSuchBucket") {
-                    Ok(())
-                } else {
-                    Err(S3Error::DeleteBucketError(Box::new(err)))
-                }
-            }
+            Err(e) if e.code() == Some("NoSuchBucket") => Ok(()),
+            Err(e) => Err(e),
         }
     }
 
-    async fn start_multipart_upload(&self, key: &str, content_type: &str) -> S3Result<String> {
-        let response = self
-            .client
-            .create_multipart_upload()
-            .bucket(self.bucket)
-            .key(key)
-            .content_type(content_type)
-            .send()
-            .await?;
+    pub async fn clear_bucket(&self, prefix: Option<&str>) -> S3Result<usize> {
+        let mut listing = std::pin::pin!(self.list_stream(prefix));
+        let mut batch = Vec::with_capacity(DELETE_BATCH_SIZE);
+        let mut deleted = 0;
 
-        let upload_id = response.upload_id().ok_or(S3Error::MissingUploadId)?;
-        Ok(upload_id.to_owned())
+        while let Some(object) = listing.try_next().await? {
+            batch.push(object.key);
+            if batch.len() == DELETE_BATCH_SIZE {
+                deleted += self.delete_objects(std::mem::take(&mut batch)).await?;
+            }
+        }
+        if !batch.is_empty() {
+            deleted += self.delete_objects(batch).await?;
+        }
+
+        if std::pin::pin!(self.list_stream(prefix)).next().await.transpose()?.is_some() {
+            return Err(S3Error::BucketNotEmpty);
+        }
+
+        tracing::info!(bucket = %self.bucket, prefix = ?prefix, deleted, "Cleared bucket");
+        Ok(deleted)
     }
 
-    async fn upload_part(&self, key: &str, upload_id: &str, part_number: i32, stream: ByteStream) -> S3Result<(i32, String)> {
-        let resp = self
+    pub async fn head(&self, key: &str) -> S3Result<ObjectMeta> {
+        let output = self
             .client
-            .upload_part()
-            .bucket(self.bucket)
+            .head_object()
+            .bucket(&*self.bucket)
             .key(key)
-            .upload_id(upload_id)
-            .part_number(part_number)
-            .body(stream)
             .send()
-            .await?;
-
-        let e_tag = resp.e_tag().ok_or(S3Error::MissingETag)?;
-        Ok((part_number, e_tag.to_string()))
+            .await
+            .op("HeadObject")?;
+        Ok(ObjectMeta::from(&output))
     }
 
-    async fn complete_multipart_upload(
-        &self,
-        key: &str,
-        upload_id: &str,
-        parts: Vec<(i32, String)>,
-    ) -> S3Result<CompleteMultipartUploadOutput> {
-        let upload_parts = parts
-            .into_iter()
-            .map(|(num, tag)| {
-                CompletedPart::builder()
-                    .set_part_number(Some(num))
-                    .set_e_tag(Some(tag))
-                    .build()
-            })
-            .collect::<Vec<_>>();
-
-        let upload = CompletedMultipartUpload::builder().set_parts(Some(upload_parts)).build();
-        let result = self
-            .client
-            .complete_multipart_upload()
-            .bucket(self.bucket)
-            .key(key)
-            .multipart_upload(upload)
-            .upload_id(upload_id)
-            .send()
-            .await?;
-
-        Ok(result)
+    pub async fn object_exists(&self, key: &str) -> S3Result<bool> {
+        match self.head(key).await {
+            Ok(_) => Ok(true),
+            Err(e) if e.is_not_found() => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
-    pub async fn abort_multipart_upload(&self, key: impl Into<String>, upload_id: impl Into<String>) -> S3Result<()> {
+    pub async fn upload(&self, key: &str, body: impl Into<ByteStream>, content_type: &str) -> S3Result<()> {
+        self.upload_with(key, body, &PutOptions::content_type(content_type)).await
+    }
+
+    pub async fn upload_with(&self, key: &str, body: impl Into<ByteStream>, options: &PutOptions) -> S3Result<()> {
         self.client
-            .abort_multipart_upload()
-            .bucket(self.bucket)
-            .key(key.into())
-            .upload_id(upload_id.into())
+            .put_object()
+            .bucket(&*self.bucket)
+            .key(key)
+            .set_content_type(options.content_type.clone())
+            .set_cache_control(options.cache_control.clone())
+            .set_content_disposition(options.content_disposition.clone())
+            .set_metadata((!options.metadata.is_empty()).then(|| options.metadata.clone()))
+            .body(body.into())
             .send()
-            .await?;
+            .await
+            .op("PutObject")?;
+
+        tracing::debug!(bucket = %self.bucket, key, "Uploaded object");
         Ok(())
     }
 
-    pub async fn upload_multipart(
+    pub async fn download(&self, key: &str) -> S3Result<S3Object> {
+        let S3ObjectStream { body, meta } = self.download_stream(key).await?;
+        let data = body.collect().await?.into_bytes();
+        tracing::debug!(bucket = %self.bucket, key, size = data.len(), "Downloaded object");
+        Ok(S3Object { data, meta })
+    }
+
+    pub async fn download_stream(&self, key: &str) -> S3Result<S3ObjectStream> {
+        let output = self
+            .client
+            .get_object()
+            .bucket(&*self.bucket)
+            .key(key)
+            .send()
+            .await
+            .op("GetObject")?;
+        let meta = ObjectMeta::from(&output);
+        Ok(S3ObjectStream { body: output.body, meta })
+    }
+
+    pub async fn download_range(&self, key: &str, start: u64, end: Option<u64>) -> S3Result<Bytes> {
+        let range = match end {
+            Some(end) => format!("bytes={start}-{end}"),
+            None => format!("bytes={start}-"),
+        };
+        let output = self
+            .client
+            .get_object()
+            .bucket(&*self.bucket)
+            .key(key)
+            .range(range)
+            .send()
+            .await
+            .op("GetObject")?;
+        Ok(output.body.collect().await?.into_bytes())
+    }
+
+    pub async fn copy_object(&self, source_key: &str, destination_key: &str) -> S3Result<Option<String>> {
+        let bucket = self.bucket.clone();
+        self.copy_object_to(&bucket, source_key, destination_key).await
+    }
+
+    pub async fn copy_object_to(
         &self,
-        key: impl Into<String>,
-        file_path: impl AsRef<Path>,
-        content_type: impl Into<String>,
-        chunk_size: Option<usize>,
-    ) -> S3Result<()> {
-        let key = key.into();
-        let content_type = content_type.into();
-        let chunk_size = chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE);
-        let upload_id = self.start_multipart_upload(&key, &content_type).await?;
-        let mut parts: Vec<(i32, String)> = vec![];
-        let mut file = File::open(&file_path).await?;
-        let mut buffer = vec![0u8; chunk_size];
-        let mut part_number = 1;
+        destination_bucket: &str,
+        source_key: &str,
+        destination_key: &str,
+    ) -> S3Result<Option<String>> {
+        let copy_source = format!("{}/{}", self.bucket, utf8_percent_encode(source_key, COPY_SOURCE_ESCAPE));
 
-        loop {
-            let mut total_read = 0;
-            loop {
-                let n = file.read(&mut buffer[total_read..]).await?;
-                if n == 0 {
-                    break;
-                }
-                total_read += n;
-                if total_read == chunk_size {
-                    break;
-                }
-            }
-            if total_read == 0 {
-                break;
-            }
+        let output = self
+            .client
+            .copy_object()
+            .copy_source(copy_source)
+            .bucket(destination_bucket)
+            .key(destination_key)
+            .send()
+            .await
+            .op("CopyObject")?;
 
-            let data = buffer[..total_read].to_vec();
-            match self.upload_part(&key, &upload_id, part_number, data.into()).await {
-                Ok((part_num, e_tag)) => {
-                    tracing::debug!(
-                        part = part_num,
-                        e_tag = %e_tag,
-                        "Uploaded part"
-                    );
-                    parts.push((part_num, e_tag));
-                }
-                Err(err) => {
-                    tracing::error!(
-                        part = part_number,
-                        error = ?err,
-                        "Upload part failed, aborting"
-                    );
-                    self.abort_multipart_upload(&key, &upload_id).await?;
-                    return Err(err);
-                }
-            }
-            part_number += 1;
-        }
-
-        self.complete_multipart_upload(&key, &upload_id, parts).await?;
-        tracing::info!(
-            key = %key,
-            parts = part_number - 1,
-            "Completed multipart upload"
+        let e_tag = output.copy_object_result().and_then(|r| r.e_tag()).map(str::to_owned);
+        tracing::debug!(
+            source = %format!("{}/{source_key}", self.bucket),
+            destination = %format!("{destination_bucket}/{destination_key}"),
+            "Copied object"
         );
+        Ok(e_tag)
+    }
 
+    pub async fn delete_object(&self, key: &str) -> S3Result<()> {
+        self.client
+            .delete_object()
+            .bucket(&*self.bucket)
+            .key(key)
+            .send()
+            .await
+            .op("DeleteObject")?;
+        tracing::debug!(bucket = %self.bucket, key, "Deleted object");
         Ok(())
     }
 
-    pub async fn download_multipart(
-        &self,
-        key: impl Into<String>,
-        file_path: impl AsRef<Path>,
-        chunk_size: Option<usize>,
-    ) -> S3Result<()> {
-        let key = key.into();
-        let chunk_size = chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE);
-        let head_resp = self.client.head_object().bucket(self.bucket).key(&key).send().await?;
-        let total_size = head_resp.content_length().unwrap_or_default() as usize;
+    pub async fn delete_objects<I, K>(&self, keys: I) -> S3Result<usize>
+    where
+        I: IntoIterator<Item = K>,
+        K: Into<String>,
+    {
+        let keys: Vec<String> = keys.into_iter().map(Into::into).collect();
+        let max_attempts = self.client.config().retry_config().map_or(1, |r| r.max_attempts()).max(1);
+        let mut deleted = 0;
+        let mut failed = Vec::new();
 
-        if total_size == 0 {
-            File::create(&file_path).await?;
-            return Ok(());
-        }
+        for chunk in keys.chunks(DELETE_BATCH_SIZE) {
+            let mut pending: Vec<&str> = chunk.iter().map(String::as_str).collect();
 
-        let mut handles = Vec::new();
-        let mut start: usize = 0;
+            for attempt in 1..=max_attempts {
+                let errors = self.delete_batch(&pending).await?;
+                deleted += pending.len() - errors.len();
 
-        while start < total_size {
-            let end = std::cmp::min(start + chunk_size, total_size) - 1;
-            let client = self.client.clone();
-            let bucket = self.bucket;
-            let key = key.clone();
-            let range_start = start;
+                let (retryable, permanent): (Vec<_>, Vec<_>) = errors
+                    .into_iter()
+                    .partition(|e| attempt < max_attempts && is_retryable_delete_error(e.code.as_deref()));
+                failed.extend(permanent);
+                if retryable.is_empty() {
+                    break;
+                }
 
-            let handle = tokio::spawn(async move {
-                let resp = client
-                    .get_object()
-                    .bucket(bucket)
-                    .key(&key)
-                    .range(format!("bytes={range_start}-{end}"))
-                    .send()
-                    .await?;
-
-                let data = resp.body.collect().await?;
-                Ok::<_, S3Error>((range_start, data.into_bytes().to_vec()))
-            });
-
-            handles.push(handle);
-            start += chunk_size;
-        }
-
-        let mut parts: Vec<(usize, Vec<u8>)> = Vec::new();
-        for handle in handles {
-            match handle.await {
-                Ok(Ok((offset, chunk))) => parts.push((offset, chunk)),
-                Ok(Err(e)) => return Err(e),
-                Err(join_err) => return Err(S3Error::TokioJoin(join_err.to_string())),
+                tracing::debug!(bucket = %self.bucket, attempt, keys = retryable.len(), "Retrying failed deletes");
+                tokio::time::sleep(delete_backoff(attempt)).await;
+                pending = chunk
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|k| retryable.iter().any(|e| e.key == *k))
+                    .collect();
             }
         }
 
-        parts.sort_by_key(|(offset, _)| *offset);
-        let mut file = File::create(&file_path).await?;
-        for (_, chunk) in parts {
-            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await?;
+        if !failed.is_empty() {
+            return Err(S3Error::PartialDelete { deleted, failed });
         }
+        tracing::debug!(bucket = %self.bucket, deleted, "Deleted objects");
+        Ok(deleted)
+    }
 
-        tracing::info!(
-            key = %key,
-            size = total_size,
-            "Downloaded file using multipart"
-        );
+    async fn delete_batch(&self, keys: &[&str]) -> S3Result<Vec<DeleteFailure>> {
+        let ids = keys
+            .iter()
+            .map(|key| ObjectIdentifier::builder().key(*key).build())
+            .collect::<Result<Vec<_>, _>>()?;
+        let delete = Delete::builder().set_objects(Some(ids)).quiet(true).build()?;
 
-        Ok(())
+        let output = self
+            .client
+            .delete_objects()
+            .bucket(&*self.bucket)
+            .delete(delete)
+            .send()
+            .await
+            .op("DeleteObjects")?;
+
+        Ok(output
+            .errors()
+            .iter()
+            .map(|e| DeleteFailure {
+                key: e.key().unwrap_or_default().to_owned(),
+                code: e.code().map(str::to_owned),
+                message: e.message().map(str::to_owned),
+            })
+            .collect())
+    }
+
+    pub fn list_stream(&self, prefix: Option<&str>) -> impl Stream<Item = S3Result<ObjectInfo>> + Send + 'static {
+        let pages = self
+            .client
+            .list_objects_v2()
+            .bucket(&*self.bucket)
+            .set_prefix(prefix.map(str::to_owned))
+            .into_paginator()
+            .send();
+
+        futures_util::stream::unfold(
+            (pages, VecDeque::new(), false),
+            |(mut pages, mut buffer, mut done)| async move {
+                loop {
+                    if let Some(item) = buffer.pop_front() {
+                        return Some((Ok(item), (pages, buffer, done)));
+                    }
+                    if done {
+                        return None;
+                    }
+                    match pages.next().await {
+                        Some(Ok(page)) => buffer.extend(page.contents().iter().filter_map(ObjectInfo::from_sdk)),
+                        Some(Err(e)) => {
+                            done = true;
+                            return Some((Err(S3Error::sdk("ListObjectsV2", e)), (pages, buffer, done)));
+                        }
+                        None => return None,
+                    }
+                }
+            },
+        )
+    }
+
+    pub async fn list_keys(&self, prefix: Option<&str>) -> S3Result<Vec<String>> {
+        self.list_stream(prefix).map_ok(|o| o.key).try_collect().await
+    }
+
+    pub async fn presign_get(&self, key: &str, expires_in: Duration) -> S3Result<PresignedUrl> {
+        let request = self
+            .client
+            .get_object()
+            .bucket(&*self.bucket)
+            .key(key)
+            .presigned(PresigningConfig::expires_in(expires_in)?)
+            .await
+            .op("GetObject")?;
+        Ok(request.into())
+    }
+
+    pub async fn presign_put(&self, key: &str, content_type: Option<&str>, expires_in: Duration) -> S3Result<PresignedUrl> {
+        let request = self
+            .client
+            .put_object()
+            .bucket(&*self.bucket)
+            .key(key)
+            .set_content_type(content_type.map(str::to_owned))
+            .presigned(PresigningConfig::expires_in(expires_in)?)
+            .await
+            .op("PutObject")?;
+        Ok(request.into())
     }
 }
