@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["s3-client", "service-images", "service-chats", "service-calls", "kafka-client", "scylladb-client", "valkey-client", "service-gateway", "service-auth", "service-channels"]
+members = ["s3-client", "service-images", "service-chats", "kafka-client", "scylladb-client", "valkey-client", "service-gateway", "service-auth", "service-channels"]
 
 [workspace.package]
 edition = "2024"
@@ -58,7 +58,7 @@ valkey-client = { path = "valkey-client" }
 
 # Tests
 axum-test = "21"
-testcontainers-modules = { version = "0.15.0", features = ["kafka", "minio", "valkey"] }
+testcontainers-modules = { version = "0.15.0", features = ["kafka", "valkey", "http_wait"] }
 anyhow = "1"
 tempfile = "3"
 

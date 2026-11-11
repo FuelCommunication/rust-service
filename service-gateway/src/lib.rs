@@ -61,7 +61,6 @@ pub struct Gateway {
     pub images_upstream: SocketAddr,
     pub chats_upstream: SocketAddr,
     pub channels_upstream: SocketAddr,
-    pub calls_upstream: SocketAddr,
     pub auth_upstream: SocketAddr,
     pub auth_endpoint: Endpoint,
     auth_client: OnceCell<AuthServiceClient<Channel>>,
@@ -73,7 +72,6 @@ impl Gateway {
         images_upstream: SocketAddr,
         chats_upstream: SocketAddr,
         channels_upstream: SocketAddr,
-        calls_upstream: SocketAddr,
         auth_upstream: SocketAddr,
         auth_endpoint: Endpoint,
         config: Arc<Config>,
@@ -82,7 +80,6 @@ impl Gateway {
             images_upstream,
             chats_upstream,
             channels_upstream,
-            calls_upstream,
             auth_upstream,
             auth_endpoint,
             auth_client: OnceCell::new(),
@@ -118,7 +115,7 @@ fn extract_token(session: &Session, path: &str) -> Option<String> {
         return Some(token.to_string());
     }
 
-    if (path.starts_with("/ws") || path.starts_with("/rooms/ws"))
+    if path.starts_with("/ws")
         && let Some(query) = session.req_header().uri.query()
     {
         for param in query.split('&') {
@@ -178,10 +175,6 @@ impl Gateway {
             }),
             p if p.starts_with("/channels") => Ok(Upstream {
                 addr: self.channels_upstream,
-                is_grpc: false,
-            }),
-            p if p.starts_with("/rooms") => Ok(Upstream {
-                addr: self.calls_upstream,
                 is_grpc: false,
             }),
             p if p.starts_with("/auth.") => Ok(Upstream {
@@ -465,7 +458,6 @@ pub fn log_config(config: &Config) {
     tracing::info!("images upstream: {}", config.images_upstream);
     tracing::info!("chats upstream: {}", config.chats_upstream);
     tracing::info!("channels upstream: {}", config.channels_upstream);
-    tracing::info!("calls upstream: {}", config.calls_upstream);
     tracing::info!("auth upstream (gRPC): {}", config.auth_upstream);
     tracing::info!("max req/sec: {}", config.max_req_per_sec);
     tracing::info!("max body size: {} bytes", config.max_body_size);
