@@ -5,15 +5,27 @@ edition.workspace = true
 readme.workspace = true
 license.workspace = true
 
+[features]
+default = ["cmake-build"]
+cmake-build = ["rdkafka/cmake-build"]
+dynamic-linking = ["rdkafka/dynamic-linking"]
+tls = ["rdkafka/ssl-vendored"]
+gssapi = ["rdkafka/gssapi-vendored"]
+zstd = ["rdkafka/zstd"]
+protobuf = ["dep:prost"]
+
 [dependencies]
-rdkafka = {version = "0.39", features = ["cmake-build"]}
-futures = "0.3"
+rdkafka = { version = "0.39", default-features = false, features = ["libz", "tokio"] }
+futures-channel = "0.3"
+futures-util.workspace = true
+prost = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 testcontainers-modules.workspace = true
 anyhow.workspace = true
