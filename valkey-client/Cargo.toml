@@ -5,11 +5,17 @@ edition.workspace = true
 readme.workspace = true
 license.workspace = true
 
+[features]
+tls = ["redis/tokio-rustls-comp", "redis/tls-rustls-webpki-roots", "dep:rustls"]
+
 [dependencies]
-redis = { version = "1.8", features = ["aio", "tokio-comp", "connection-manager"] }
+redis = { version = "1.8", default-features = false, features = ["aio", "tokio-comp", "connection-manager", "script", "acl"] }
+rustls = { version = "0.23", optional = true, default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true
 
 [dev-dependencies]
